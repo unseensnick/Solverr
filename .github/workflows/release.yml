@@ -47,20 +47,18 @@ jobs:
           prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
           repo="${{ github.server_url }}/${{ github.repository }}"
           {
-            echo "RELEASE_BODY<<__EOF__"
             printf '%s\n\n' "$highlights"
             printf '**Full changelog:** %s/blob/main/CHANGELOG.md\n' "$repo"
             if [ -n "$prev" ]; then
               printf '**Changes since %s:** %s/compare/%s...%s\n' "$prev" "$repo" "$prev" "$GITHUB_REF_NAME"
             fi
-            echo "__EOF__"
-          } >> "$GITHUB_ENV"
+          } > release_body.md
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Solverr ${{ github.ref_name }}
-          body: ${{ env.RELEASE_BODY }}
+          body_path: release_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

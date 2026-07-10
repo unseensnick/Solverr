@@ -17,6 +17,9 @@ jobs:
 
       - name: Auto tag
         uses: Klemensas/action-autotag@stable
-        with:
+        # The token is read from the environment (not a `with:` input) so its
+        # pushed tag triggers release.yml / release-docker.yml.
+        env:
           GITHUB_TOKEN: "${{ secrets.GH_PAT }}"
+        with:
           tag_prefix: "v"
