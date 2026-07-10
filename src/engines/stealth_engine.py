@@ -28,6 +28,10 @@ from dtos import V1RequestBase
 from engines.base import Engine, SolveResult
 from postform import build_post_html
 
+# Best-effort settle waits are bounded; the hard navigation cap comes from the
+# request's maxTimeout via asyncio.wait_for in _do_solve.
+_NETWORKIDLE_MS = 5000
+
 
 def _proxy_to_config(proxy: Optional[dict]) -> Optional[dict]:
     """Convert a FlareSolverr proxy dict ({url, username, password}) to the
@@ -61,6 +65,7 @@ class StealthContext:
         self.page = None
         self._solver_cm = None
         self.solver = None
+        self.user_agent = ""
 
     def lifetime(self) -> timedelta:
         return datetime.now() - self.created_at
@@ -78,8 +83,14 @@ class StealthContext:
         self.browser = await self._ip.__aenter__()
         self.context = await self.browser.new_context()
         self.page = await self.context.new_page()
+        # Capture the UA now, on the blank page: challenge pages set a strict CSP
+        # that blocks eval(), which page.evaluate() relies on in Firefox/Camoufox.
+        try:
+            self.user_agent = await self.page.evaluate("() => navigator.userAgent")
+        except Exception:
+            logging.debug("could not capture stealth user agent", exc_info=True)
         self._solver_cm = ClickSolver(
-            framework=FrameworkType.PLAYWRIGHT,
+            framework=FrameworkType.CAMOUFOX,
             page=self.page,
             max_attempts=config.stealth_max_attempts(),
             attempt_delay=1,
@@ -238,7 +249,6 @@ class StealthEngine(Engine):
     async def _navigate_and_solve(self, req: V1RequestBase, ctx: StealthContext,
                                   method: str) -> SolveResult:
         page = ctx.page
-        nav_timeout_ms = None  # let asyncio.wait_for enforce the hard cap
 
         disable_media = utils.get_config_disable_media()
         if req.disableMedia is not None:
@@ -253,31 +263,29 @@ class StealthEngine(Engine):
                     await route.continue_()
             await page.route("**/*", block_handler)
 
-        try:
-            # navigate to the page
-            logging.debug(f"Navigating to... {req.url}")
-            resp = None
+        async def navigate():
+            # timeout=0 defers to the outer asyncio.wait_for(maxTimeout) hard cap.
+            # wait_until="domcontentloaded" avoids hanging on the full "load" event,
+            # which a Cloudflare-gated API endpoint can hold open past the timeout.
             if method == "POST":
                 await page.goto("data:text/html;charset=utf-8," + build_post_html(req.url, req.postData),
-                                timeout=nav_timeout_ms)
-                await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
+                                wait_until="domcontentloaded", timeout=0)
+                try:  # wait for the auto-submit to navigate to the POST target
+                    await page.wait_for_load_state("domcontentloaded", timeout=_NETWORKIDLE_MS)
+                except Exception:
+                    logging.debug("post-submit load wait timed out")
             else:
-                resp = await page.goto(req.url, timeout=nav_timeout_ms)
-                await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
+                await page.goto(req.url, wait_until="domcontentloaded", timeout=0)
 
-            status = resp.status if resp else 200
+        try:
+            logging.debug(f"Navigating to... {req.url}")
+            await navigate()
 
             # set cookies if required, then reload (mirrors the Chrome engine)
             if req.cookies is not None and len(req.cookies) > 0:
                 logging.debug("Setting cookies...")
                 await ctx.context.add_cookies(req.cookies)
-                if method == "POST":
-                    await page.goto("data:text/html;charset=utf-8," + build_post_html(req.url, req.postData),
-                                    timeout=nav_timeout_ms)
-                else:
-                    resp = await page.goto(req.url, timeout=nav_timeout_ms)
-                    status = resp.status if resp else status
-                await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
+                await navigate()
 
             if utils.get_config_log_html():
                 logging.debug(f"Response HTML:\n{await page.content()}")
@@ -319,7 +327,7 @@ class StealthEngine(Engine):
                 message = "Challenge solved!"
             else:
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=nav_timeout_ms)
+                    await page.wait_for_load_state("networkidle", timeout=_NETWORKIDLE_MS)
                 except Exception:
                     logging.debug("networkidle wait timed out")
                 logging.info("Challenge not detected!")
@@ -327,9 +335,14 @@ class StealthEngine(Engine):
 
             result = SolveResult()
             result.url = page.url
-            result.status = status
+            # FlareSolverr contract: solution.status is 200 on a fetched/solved page,
+            # and clients (e.g. the reader app) reject non-2xx. The Chrome engine also
+            # hardcodes 200; report 200 here so a Cloudflare 403 challenge page (or an
+            # upstream 403) doesn't get surfaced as a solve failure. A real block is
+            # already raised as an error by the "denied" detection above.
+            result.status = 200
             result.cookies = await ctx.context.cookies()
-            result.user_agent = await page.evaluate("navigator.userAgent")
+            result.user_agent = ctx.user_agent
             result.message = message
 
             if not req.returnOnlyCookies:
@@ -367,7 +380,7 @@ class StealthEngine(Engine):
             server=config.captcha_api_server(),
         )
         async with TwoCaptchaSolver(
-            framework=FrameworkType.PLAYWRIGHT,
+            framework=FrameworkType.CAMOUFOX,
             page=page,
             async_two_captcha_client=client,
             max_attempts=config.captcha_api_max_attempts(),

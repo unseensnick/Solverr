@@ -52,7 +52,7 @@ def test_browser_installation():
 
     logging.info("Launching web browser...")
     user_agent = utils.get_user_agent()
-    logging.info("FlareSolverr User-Agent: " + user_agent)
+    logging.info("Solverr User-Agent: " + user_agent)
     logging.info("Test successful!")
 
 

@@ -6,7 +6,6 @@ keep the service behaving like stock FlareSolverr with the stealth engine
 available but not the default.
 """
 import os
-import sys
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -28,15 +27,16 @@ def stealth_headless() -> bool:
 
 
 def stealth_max_attempts() -> int:
-    """Click-solver attempts per request. Empty/invalid => effectively unlimited,
-    bounded by the request's maxTimeout (mirrors Byparr)."""
+    """Click-solver attempts per request. Bounded (default 5) so an unsolvable
+    challenge fails fast and hands off to fallback, instead of spinning until the
+    request's maxTimeout. Set STEALTH_MAX_ATTEMPTS to override."""
     raw = os.environ.get('STEALTH_MAX_ATTEMPTS', '').strip()
     if not raw:
-        return sys.maxsize
+        return 5
     try:
         return int(raw)
     except ValueError:
-        return sys.maxsize
+        return 5
 
 
 def stealth_start_timeout() -> float:

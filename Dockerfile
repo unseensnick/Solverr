@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 # Build dummy packages to skip installing them and their dependencies
 RUN apt-get update \
@@ -12,7 +12,7 @@ RUN apt-get update \
     && equivs-build adwaita-icon-theme \
     && mv adwaita-icon-theme_*.deb /adwaita-icon-theme.deb
 
-FROM python:3.11-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 # Copy dummy packages
 COPY --from=builder /*.deb /
@@ -60,6 +60,11 @@ RUN apt-get update \
     && python -m invisible_playwright fetch \
     && chmod -R o+rwX /cache \
     && rm -rf /var/lib/apt/lists/*
+
+# playwright-captcha's CAMOUFOX mode writes a per-run addon script into its own
+# package dir; make it writable by the non-root runtime user.
+RUN CAMO_DIR="$(python -c 'import os, playwright_captcha as p; print(os.path.join(os.path.dirname(p.__file__), "utils", "camoufox_add_init_script"))')" \
+    && chmod -R a+rwX "$CAMO_DIR"
 
 USER flaresolverr
 

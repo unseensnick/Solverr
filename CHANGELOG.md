@@ -21,3 +21,4 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - Rewrote the README and repo workflows/issue templates for the fork; switched to Solverr's own SemVer.
 - Fixed logging being suppressed after the stealth libraries loaded (no output reached `docker logs`).
 - Relicensed under GPL-3.0 (Byparr's copyleft license, the stricter of the two upstreams); FlareSolverr's MIT notice preserved in `NOTICE`.
+- Base image updated to Python 3.14.

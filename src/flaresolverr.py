@@ -131,7 +131,7 @@ if __name__ == "__main__":
     logging.getLogger('selenium.webdriver.remote.remote_connection').setLevel(logging.WARNING)
     logging.getLogger('undetected_chromedriver').setLevel(logging.WARNING)
 
-    logging.info(f'FlareSolverr {utils.get_flaresolverr_version()}')
+    logging.info(f'Solverr {utils.get_flaresolverr_version()}')
     logging.debug('Debug log enabled')
 
     # Get current OS for global variable
