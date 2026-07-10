@@ -4,6 +4,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.0.0]
+
 ### Additions
 
 - **A second solving engine clears the newer Cloudflare challenges Chrome can't.** Camoufox (an anti-detect Firefox) plus playwright-captcha handles Turnstile and Managed Challenges that headless Chromium gives up on.
