@@ -1,5 +1,7 @@
 # Solverr
 
+[![Docker release](https://github.com/unseensnick/Solverr/actions/workflows/release-docker.yml/badge.svg?labelColor=27303D)](https://github.com/unseensnick/Solverr/actions/workflows/release-docker.yml) [![Container image](https://img.shields.io/github/v/release/unseensnick/Solverr?label=ghcr.io&logo=docker&logoColor=white&labelColor=27303D&color=2496ED)](https://github.com/unseensnick/Solverr/pkgs/container/solverr) [![License: GPL-3.0](https://img.shields.io/github/license/unseensnick/Solverr?labelColor=27303D&color=0877d2)](LICENSE)
+
 Solverr is a proxy server to bypass Cloudflare and DDoS-GUARD protection. It fuses the two best open-source solvers into one service and switches between them automatically, so you get reliable solving **and** coverage of the newer challenge tiers.
 
 - **Chrome engine** (default) — the original [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) approach: [Selenium](https://www.selenium.dev) + [undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver) driving a real Chromium. Fast, session-capable, and clears most sites.
