@@ -53,6 +53,26 @@ docker run -d \
   solverr
 ```
 
+**Run the published image instead** (no local build) — save as `docker-compose.yml` and `docker compose up -d`:
+
+```yaml
+services:
+  solverr:
+    image: ghcr.io/unseensnick/solverr:latest
+    container_name: solverr
+    ports:
+      - "8191:8191"
+    environment:
+      - DEFAULT_ENGINE=chrome     # chrome | stealth | auto
+      - ENGINE_FALLBACK=true
+      - TZ=UTC
+      # See Configuration below for the full env list.
+    shm_size: 512mb
+    restart: unless-stopped
+```
+
+Or with the CLI: `docker run -d --name solverr -p 8191:8191 --shm-size=512m --restart unless-stopped ghcr.io/unseensnick/solverr:latest`.
+
 On a Debian **host**, make sure `libseccomp2` is 2.5.x (`sudo apt-cache policy libseccomp2`) or the browser may fail to start; update it and restart the Docker daemon.
 
 ### From source

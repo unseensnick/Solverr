@@ -20,9 +20,10 @@ After a code change with any user-facing effect, add a bullet under `## [Unrelea
 
 1. Rename `## [Unreleased]` to `## [<version>]` with the date.
 2. Add a fresh empty `## [Unreleased]` above it.
-3. Bump `version` in `package.json` to `<version>`.
+3. Bump `version` in `package.json` to `<version>`, and commit.
+4. Tag and push: `git tag v<version> && git push origin v<version>`.
 
-Pushing that to `main` lets `autotag.yml` create the `v<version>` tag, which triggers `release.yml` (GitHub release) and `release-docker.yml` (ghcr image). Don't bump the version mid-cycle; only at release-cut.
+The tag triggers `release-docker.yml` (builds + pushes the ghcr image) and `release.yml` (creates the GitHub Release from the `[<version>]` section). `release.yml` can also be run manually from the Actions tab (workflow_dispatch) with the version and an optional note. Don't bump the version mid-cycle; only at release-cut.
 
 ## Commits & PRs
 
