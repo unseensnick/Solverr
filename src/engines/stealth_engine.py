@@ -32,6 +32,11 @@ from postform import build_post_html
 # request's maxTimeout via asyncio.wait_for in _do_solve.
 _NETWORKIDLE_MS = 5000
 
+# playwright-captcha logs each failed click attempt at ERROR, which is expected
+# and harmless for non-interactive interstitials (no checkbox to click). We handle
+# the solve outcome ourselves, so quiet its internal noise to keep logs readable.
+logging.getLogger("playwright_captcha").setLevel(logging.CRITICAL)
+
 
 def _proxy_to_config(proxy: Optional[dict]) -> Optional[dict]:
     """Convert a FlareSolverr proxy dict ({url, username, password}) to the
@@ -244,10 +249,10 @@ class StealthEngine(Engine):
     async def _do_solve(self, req: V1RequestBase, ctx: StealthContext, method: str,
                         timeout: float) -> SolveResult:
         async with ctx.lock:
-            return await asyncio.wait_for(self._navigate_and_solve(req, ctx, method), timeout=timeout)
+            return await asyncio.wait_for(self._navigate_and_solve(req, ctx, method, timeout), timeout=timeout)
 
     async def _navigate_and_solve(self, req: V1RequestBase, ctx: StealthContext,
-                                  method: str) -> SolveResult:
+                                  method: str, timeout: float) -> SolveResult:
         page = ctx.page
 
         disable_media = utils.get_config_disable_media()
@@ -300,29 +305,24 @@ class StealthEngine(Engine):
                                 else CaptchaType.CLOUDFLARE_INTERSTITIAL)
                 logging.info("Challenge detected. Solving with stealth engine (%s)...",
                              captcha_type.name)
-                click_ok = True
+                deadline = asyncio.get_running_loop().time() + max(1.0, timeout - 3)
+                solved = await self._wait_until_cleared(ctx, page, captcha_type, deadline)
+
+                # Escalate to the paid CAPTCHA API only if configured and still stuck.
+                if not solved and config.api_solver_enabled():
+                    logging.info("Escalating to paid CAPTCHA API solver (%s)...",
+                                 config.captcha_provider())
+                    await self._api_solve(page, captcha_type)
+                    solved = (await self._detect(page))[0] != "challenge"
+
+                if not solved:
+                    raise Exception("Challenge still present after solving attempts")
+                # Let the post-challenge redirect to the real page settle before we
+                # read the content.
                 try:
-                    await ctx.solver.solve_captcha(  # type: ignore[union-attr]
-                        captcha_container=page,
-                        captcha_type=captcha_type,
-                        wait_checkbox_attempts=1,
-                        wait_checkbox_delay=0.5,
-                    )
-                except Exception as e:
-                    click_ok = False
-                    logging.warning("Click-solver failed: %s", e)
-
-                # Escalate to the paid CAPTCHA API only if configured, and only when the
-                # free click-solve failed or left the page still challenged.
-                if config.api_solver_enabled():
-                    still_challenged = (await self._detect(page))[0] == "challenge"
-                    if not click_ok or still_challenged:
-                        logging.info("Escalating to paid CAPTCHA API solver (%s)...",
-                                     config.captcha_provider())
-                        await self._api_solve(page, captcha_type)
-                elif not click_ok:
-                    raise Exception("Click-solver failed and no CAPTCHA API is configured")
-
+                    await page.wait_for_load_state("domcontentloaded", timeout=_NETWORKIDLE_MS)
+                except Exception:
+                    logging.debug("post-solve settle timed out")
                 logging.info("Challenge solved!")
                 message = "Challenge solved!"
             else:
@@ -362,6 +362,39 @@ class StealthEngine(Engine):
                     await page.unroute("**/*", block_handler)
                 except Exception:
                     logging.debug("unroute failed", exc_info=True)
+
+    async def _wait_until_cleared(self, ctx: StealthContext, page, captcha_type, deadline) -> bool:
+        """Wait for the Cloudflare challenge to clear, up to ``deadline``.
+
+        Non-interactive interstitials solve themselves after a few seconds of JS,
+        so we poll for the challenge to disappear. Interactive Turnstile/checkbox
+        challenges need a click, so each pass also nudges the click-solver (a
+        harmless "iframes not found" when there's no checkbox to click).
+        """
+        loop = asyncio.get_running_loop()
+        while True:
+            kind = (await self._detect(page))[0]
+            if kind == "denied":
+                raise Exception('Cloudflare has blocked this request. '
+                                'Probably your IP is banned for this site, check in your web browser.')
+            if kind != "challenge":
+                return True
+
+            try:
+                await ctx.solver.solve_captcha(  # type: ignore[union-attr]
+                    captcha_container=page,
+                    captcha_type=captcha_type,
+                    wait_checkbox_attempts=1,
+                    wait_checkbox_delay=0.5,
+                )
+            except Exception as e:
+                logging.debug("click-solve nudge: %s", e)
+
+            if (await self._detect(page))[0] != "challenge":
+                return True
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(1.5)
 
     async def _api_solve(self, page, captcha_type) -> None:
         """Solve via a paid 2captcha-compatible service (2captcha / CapSolver / ...).

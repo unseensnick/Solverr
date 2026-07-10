@@ -27,16 +27,16 @@ def stealth_headless() -> bool:
 
 
 def stealth_max_attempts() -> int:
-    """Click-solver attempts per request. Bounded (default 5) so an unsolvable
-    challenge fails fast and hands off to fallback, instead of spinning until the
-    request's maxTimeout. Set STEALTH_MAX_ATTEMPTS to override."""
+    """Click attempts per click-solver nudge (default 1). The engine runs its own
+    wait-and-retry loop bounded by the request's maxTimeout, so one attempt per
+    nudge keeps each pass fast. Set STEALTH_MAX_ATTEMPTS to override."""
     raw = os.environ.get('STEALTH_MAX_ATTEMPTS', '').strip()
     if not raw:
-        return 5
+        return 1
     try:
         return int(raw)
     except ValueError:
-        return 5
+        return 1
 
 
 def stealth_start_timeout() -> float:
