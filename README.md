@@ -97,7 +97,7 @@ Set `STEALTH_ENGINE=false` to run Chrome-only and skip the Camoufox/Firefox setu
 
 ## Engines & fallback
 
-Choose the engine per request with the optional `engine` field, or set the default with `DEFAULT_ENGINE`.
+A client can **force** an engine per request with the optional `engine` field; the `DEFAULT_ENGINE` env var only sets which engine is tried **first** when a request doesn't specify one.
 
 | Request `engine` | Behaviour                                                                                                     |
 | ---------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -106,6 +106,8 @@ Choose the engine per request with the optional `engine` field, or set the defau
 | `stealth`        | Camoufox only, no fallback.                                                                                    |
 
 Fallback triggers when an engine throws (blocked / timeout), or returns a page that still looks like an unsolved challenge. Set `ENGINE_FALLBACK=false` to disable it.
+
+> **`DEFAULT_ENGINE=chrome` does not disable fallback.** The "no fallback" rows apply only to the per-request `engine` field (a client forcing one engine). `DEFAULT_ENGINE` just picks the *primary*; the other engine is still used as fallback unless `ENGINE_FALLBACK=false`. Most FlareSolverr clients (the *arr apps, readers) don't send an `engine` field, so they always get the fallback path.
 
 ## Sessions & automatic cleanup
 
@@ -224,7 +226,7 @@ All settings are environment variables and all are optional.
 
 | Variable               | Default     | Description                                                                    |
 | ---------------------- | ----------- | ----------------------------------------------------------------------------- |
-| `DEFAULT_ENGINE`       | `chrome`    | Engine for requests that don't set `engine` (`chrome` \| `stealth` \| `auto`). |
+| `DEFAULT_ENGINE`       | `chrome`    | Which engine is tried **first** for requests that don't set `engine` (`chrome` \| `stealth` \| `auto`). Does not disable fallback (that's `ENGINE_FALLBACK`). |
 | `STEALTH_ENGINE`       | `true`      | Load the Camoufox engine. Set `false` for a lighter, Chrome-only runtime.      |
 | `ENGINE_FALLBACK`      | `true`      | Retry the other engine when the first fails or returns an unsolved challenge.   |
 | `STEALTH_HEADLESS`     | `true`      | Run Camoufox headless.                                                          |
