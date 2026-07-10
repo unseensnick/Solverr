@@ -18,7 +18,7 @@ After a code change with any user-facing effect, add a bullet under `## [Unrelea
 
 ## Cutting a release (user-initiated)
 
-1. Rename `## [Unreleased]` to `## [<version>]` with the date.
+1. Rename `## [Unreleased]` to `## [<version>]`.
 2. Add a fresh empty `## [Unreleased]` above it.
 3. Bump `version` in `package.json` to `<version>`, and commit.
 4. Tag and push: `git tag v<version> && git push origin v<version>`.
