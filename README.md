@@ -57,7 +57,7 @@ On a Debian **host**, make sure `libseccomp2` is 2.5.x (`sudo apt-cache policy l
 
 ### From source
 
-For development or unsupported architectures. Requires Python 3.11, and both browsers if you want both engines:
+For development or unsupported architectures. Requires Python 3.11+ (the Docker image uses 3.14), and both browsers if you want both engines:
 
 ```bash
 # install Python deps (pip, or `uv pip`)
@@ -206,7 +206,7 @@ All settings are environment variables and all are optional.
 | `STEALTH_ENGINE`       | `true`      | Load the Camoufox engine. Set `false` for a lighter, Chrome-only runtime.      |
 | `ENGINE_FALLBACK`      | `true`      | Retry the other engine when the first fails or returns an unsolved challenge.   |
 | `STEALTH_HEADLESS`     | `true`      | Run Camoufox headless.                                                          |
-| `STEALTH_MAX_ATTEMPTS` | unlimited   | Click-solver attempts per request (bounded by `maxTimeout`).                    |
+| `STEALTH_MAX_ATTEMPTS` | `1`         | Click attempts per solver nudge; the engine runs its own wait loop bounded by `maxTimeout`. |
 | `STEALTH_START_TIMEOUT`| `120`       | Seconds allowed to launch a Camoufox browser.                                   |
 
 ### Sessions & cleanup
