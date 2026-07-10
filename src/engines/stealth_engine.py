@@ -296,6 +296,15 @@ class StealthEngine(Engine):
                 logging.debug(f"Response HTML:\n{await page.content()}")
 
             kind, is_turnstile = await self._detect(page)
+            if kind == "none":
+                # An async challenge or widget (e.g. a Turnstile injected via api.js
+                # after domcontentloaded) may not be in the DOM yet; settle and recheck.
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=_NETWORKIDLE_MS)
+                except Exception:
+                    logging.debug("networkidle wait timed out")
+                kind, is_turnstile = await self._detect(page)
+
             if kind == "denied":
                 raise Exception('Cloudflare has blocked this request. '
                                 'Probably your IP is banned for this site, check in your web browser.')
@@ -326,10 +335,6 @@ class StealthEngine(Engine):
                 logging.info("Challenge solved!")
                 message = "Challenge solved!"
             else:
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=_NETWORKIDLE_MS)
-                except Exception:
-                    logging.debug("networkidle wait timed out")
                 logging.info("Challenge not detected!")
                 message = "Challenge not detected!"
 
@@ -344,6 +349,10 @@ class StealthEngine(Engine):
             result.cookies = await ctx.context.cookies()
             result.user_agent = ctx.user_agent
             result.message = message
+            # Parity with the Chrome engine: return the Turnstile token when a
+            # standalone widget is present.
+            if is_turnstile:
+                result.turnstile_token = await self._turnstile_token(page)
 
             if not req.returnOnlyCookies:
                 result.headers = {}
@@ -372,6 +381,7 @@ class StealthEngine(Engine):
         harmless "iframes not found" when there's no checkbox to click).
         """
         loop = asyncio.get_running_loop()
+        is_turnstile = captcha_type == CaptchaType.CLOUDFLARE_TURNSTILE
         while True:
             kind = (await self._detect(page))[0]
             if kind == "denied":
@@ -380,6 +390,7 @@ class StealthEngine(Engine):
             if kind != "challenge":
                 return True
 
+            solved_click = False
             try:
                 await ctx.solver.solve_captcha(  # type: ignore[union-attr]
                     captcha_container=page,
@@ -387,14 +398,27 @@ class StealthEngine(Engine):
                     wait_checkbox_attempts=1,
                     wait_checkbox_delay=0.5,
                 )
+                solved_click = True
             except Exception as e:
                 logging.debug("click-solve nudge: %s", e)
 
+            # A standalone Turnstile widget stays in the DOM after solving, so
+            # _detect keeps seeing it. Treat it as solved once its token is filled
+            # (interactive click or non-interactive auto-pass) or the solver reports
+            # success, rather than waiting for the input to vanish.
+            if is_turnstile and ((await self._turnstile_token(page)) or solved_click):
+                return True
             if (await self._detect(page))[0] != "challenge":
                 return True
             if loop.time() >= deadline:
                 return False
             await asyncio.sleep(1.5)
+
+    async def _turnstile_token(self, page) -> Optional[str]:
+        """Value of a standalone Turnstile input (the solved token), or None.
+        Uses get_attribute, which works even under a challenge page's CSP."""
+        el = await page.query_selector(TURNSTILE_SELECTORS[0])
+        return (await el.get_attribute("value")) if el else None
 
     async def _api_solve(self, page, captcha_type) -> None:
         """Solve via a paid 2captcha-compatible service (2captcha / CapSolver / ...).
