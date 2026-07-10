@@ -30,7 +30,7 @@ RUN dpkg -i /libgl1-mesa-dri.deb \
     # Install dependencies
     && apt-get update \
     && apt-get install -y --no-install-recommends chromium chromium-common chromium-driver xvfb dumb-init \
-        procps curl vim xauth \
+        procps curl vim xauth git \
     # Remove temporary files and hardware decoding libraries
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /usr/lib/x86_64-linux-gnu/libmfxhw* \
@@ -47,9 +47,19 @@ VOLUME /config
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install -r requirements.txt \
-    # Remove temporary files
-    && rm -rf /root/.cache
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Stealth engine: install Firefox runtime libraries and fetch the Camoufox
+# browser into a shared, world-readable cache the non-root runtime user can use.
+# XDG_CACHE_HOME is set globally so both the build-time fetch and the runtime
+# resolve the same browser location.
+ENV XDG_CACHE_HOME=/cache
+RUN apt-get update \
+    && playwright install-deps firefox \
+    && mkdir -p /cache \
+    && python -m invisible_playwright fetch \
+    && chmod -R o+rwX /cache \
+    && rm -rf /var/lib/apt/lists/*
 
 USER flaresolverr
 

@@ -108,7 +108,11 @@ if __name__ == "__main__":
             handlers=[
                 logging.StreamHandler(sys.stdout),
                 logging.FileHandler(log_file)
-            ]
+            ],
+            # The stealth engine's imports (camoufox/playwright) add a root logging
+            # handler, which would make this basicConfig a no-op. force=True removes it
+            # so our stdout/INFO config wins and logs reach `docker logs`.
+            force=True
         )
     else:
         logging.basicConfig(
@@ -117,7 +121,9 @@ if __name__ == "__main__":
             datefmt='%Y-%m-%d %H:%M:%S',
             handlers=[
                 logging.StreamHandler(sys.stdout)
-            ]
+            ],
+            # See note above: force our config over any handler an import installed.
+            force=True
         )
 
     # disable warning traces from urllib3
@@ -133,6 +139,20 @@ if __name__ == "__main__":
 
     # test browser installation
     flaresolverr_service.test_browser_installation()
+
+    # start the idle-session reaper for every active engine
+    import config
+    from datetime import timedelta
+    from session_reaper import SessionReaper
+    reaper_managers = [flaresolverr_service.SESSIONS_STORAGE]
+    if flaresolverr_service.STEALTH_ENGINE is not None:
+        reaper_managers.append(flaresolverr_service.STEALTH_ENGINE)
+    SessionReaper(
+        reaper_managers,
+        timedelta(minutes=config.session_ttl_minutes()),
+        config.session_max(),
+        config.reaper_interval_seconds(),
+    ).start()
 
     # start bootle plugins
     # plugin order is important

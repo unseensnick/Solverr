@@ -1,63 +1,37 @@
 name: Release
 
+# Creates a GitHub Release with an auto-generated changelog when a version tag
+# is pushed. Docker images are published separately by release-docker.yml.
+
 on:
   push:
-    tags:
-      - "v*.*.*"
+    tags: ["v*.*.*"]
 
 jobs:
   create-release:
     name: Create release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Build changelog
-        id: github_changelog
+        id: changelog
         run: |
-          changelog=$(git log $(git tag | tail -2 | head -1)..HEAD --no-merges --oneline)
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$changelog" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          range=${prev:+$prev..HEAD}
+          {
+            echo "changelog<<EOF"
+            git log $range --no-merges --oneline
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.github_changelog.outputs.changelog }}
+          body: ${{ steps.changelog.outputs.changelog }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-
-  build-package:
-    name: Build binaries
-    needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-22.04, windows-latest]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Build artifacts
-        run: |
-          python -m pip install -r requirements.txt
-          python -m pip install pyinstaller==6.20.0
-          cd src
-          python build_package.py
-
-      - name: Upload release artifacts
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ./dist/flaresolverr_*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

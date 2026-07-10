@@ -1,347 +1,272 @@
-# FlareSolverr
+# Solverr
 
-[![Latest release](https://img.shields.io/github/v/release/FlareSolverr/FlareSolverr)](https://github.com/FlareSolverr/FlareSolverr/releases)
-[![Docker Pulls](https://img.shields.io/docker/pulls/flaresolverr/flaresolverr)](https://hub.docker.com/r/flaresolverr/flaresolverr)
-[![Docker Stars](https://img.shields.io/docker/stars/flaresolverr/flaresolverr)](https://hub.docker.com/r/flaresolverr/flaresolverr)
-[![GitHub issues](https://img.shields.io/github/issues/FlareSolverr/FlareSolverr)](https://github.com/FlareSolverr/FlareSolverr/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/FlareSolverr/FlareSolverr)](https://github.com/FlareSolverr/FlareSolverr/pulls)
-[![GitHub Repo stars](https://img.shields.io/github/stars/FlareSolverr/FlareSolverr)](https://github.com/FlareSolverr/FlareSolverr)
+Solverr is a proxy server to bypass Cloudflare and DDoS-GUARD protection. It fuses the two best open-source solvers into one service and switches between them automatically, so you get reliable solving **and** coverage of the newer challenge tiers.
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/ngosang)
+- **Chrome engine** (default) — the original [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) approach: [Selenium](https://www.selenium.dev) + [undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver) driving a real Chromium. Fast, session-capable, and clears most sites.
+- **Stealth engine** — [Byparr](https://github.com/ThePhaseless/Byparr)'s stack: [Camoufox](https://github.com/daijro/camoufox) (an anti-detect Firefox that patches its fingerprint in compiled code) + [playwright-captcha](https://github.com/techinz/playwright-captcha). Clears the newer Cloudflare **Turnstile / Managed Challenges** that headless Chromium gives up on.
 
-FlareSolverr is a proxy server to bypass Cloudflare and DDoS-GUARD protection.
+It speaks the exact FlareSolverr `/v1` API on port `8191`, so it is a drop-in replacement: existing clients (the *arr stack, manga/novel readers, etc.) work unchanged.
 
 ## How it works
 
-FlareSolverr starts a proxy server, and it waits for user requests in an idle state using few resources.
-When some request arrives, it uses [Selenium](https://www.selenium.dev) with the
-[undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver)
-to create a web browser (Chrome). It opens the URL with user parameters and waits until the Cloudflare challenge
-is solved (or timeout). The HTML code and the cookies are sent back to the user, and those cookies can be used to
-bypass Cloudflare using other HTTP clients.
+Solverr waits for requests in an idle state. When one arrives it opens the URL in a real browser, waits until the challenge is solved (or the timeout is hit), and returns the page HTML plus the cookies. Those cookies (e.g. `cf_clearance`, `__ddg2_`) can then be reused by any HTTP client to reach the site directly.
 
-**NOTE**: Web browsers consume a lot of memory. If you are running FlareSolverr on a machine with few RAM, do not make
-many requests at once. With each request a new browser is launched.
+Each request picks an engine and **automatically falls back to the other** when the first is blocked, times out, or hands back an unsolved "Just a moment..." page. Solverr remembers which engine cleared each host and routes there first next time.
 
-It is also possible to use a permanent session. However, if you use sessions, you should make sure to close them as
-soon as you are done using them.
+The escalation ladder for a normal request is:
+
+```
+Chrome engine  →  Camoufox click-solve  →  (optional) paid CAPTCHA API
+```
+
+> **Web browsers use a lot of memory.** Each session keeps a browser alive; sessionless requests launch one per request. On a low-RAM machine, avoid many concurrent requests. Solverr closes idle sessions automatically (see [Sessions & cleanup](#sessions--automatic-cleanup)).
+
+## Quick start
+
+```bash
+docker compose up -d --build      # builds the dual-browser image (~2.3 GB)
+```
+
+Then point your client at `http://<host>:8191` and send a request:
+
+```bash
+curl -sX POST 'http://localhost:8191/v1' \
+  -H 'Content-Type: application/json' \
+  --data '{ "cmd": "request.get", "url": "https://www.google.com/", "maxTimeout": 60000 }'
+```
 
 ## Installation
 
-### Docker
+### Docker (recommended)
 
-It is recommended to install using a Docker container because the project depends on an external browser that is
-already included within the image.
+The browsers are bundled in the image, so Docker is the easiest path. A `docker-compose.yml` is provided; edit the environment block to taste and run `docker compose up -d --build`.
 
-Docker images are available in:
-
-- GitHub Registry => https://github.com/orgs/FlareSolverr/packages/container/package/flaresolverr
-- DockerHub => https://hub.docker.com/r/flaresolverr/flaresolverr
-
-Supported architectures are:
-
-| Architecture | Tag          |
-| ------------ | ------------ |
-| x86          | linux/386    |
-| x86-64       | linux/amd64  |
-| ARM32        | linux/arm/v7 |
-| ARM64        | linux/arm64  |
-
-We provide a `docker-compose.yml` configuration file. Clone this repository and execute
-`docker-compose up -d` _(Compose V1)_ or `docker compose up -d` _(Compose V2)_ to start
-the container.
-
-If you prefer the `docker cli` execute the following command:
-
-**Bash**
+Or with the Docker CLI (build the image once, then run it):
 
 ```bash
+docker build -t solverr .
 docker run -d \
-  --name=flaresolverr \
+  --name=solverr \
   -p 8191:8191 \
-  -e LOG_LEVEL=info \
+  --shm-size=512m \
   --restart unless-stopped \
-  ghcr.io/flaresolverr/flaresolverr:latest
+  solverr
 ```
 
-**Command Prompt or Powershell**
+On a Debian **host**, make sure `libseccomp2` is 2.5.x (`sudo apt-cache policy libseccomp2`) or the browser may fail to start; update it and restart the Docker daemon.
 
-```cmd
-docker run -d --name=flaresolverr -p 8191:8191 -e LOG_LEVEL=info --restart unless-stopped ghcr.io/flaresolverr/flaresolverr:latest
-```
+### From source
 
-If your host OS is Debian, make sure `libseccomp2` version is 2.5.x. You can check the version with `sudo apt-cache policy libseccomp2`
-and update the package with `sudo apt install libseccomp2=2.5.1-1~bpo10+1` or `sudo apt install libseccomp2=2.5.1-1+deb11u1`.
-Remember to restart the Docker daemon and the container after the update.
-
-### Precompiled binaries
-
-> **Warning**
-> Precompiled binaries are only available for x64 architecture. For other architectures see Docker images.
-
-This is the recommended way for Windows users.
-
-- Download the [FlareSolverr executable](https://github.com/FlareSolverr/FlareSolverr/releases) from the release's page. It is available for Windows x64 and Linux x64.
-- Execute FlareSolverr binary. In the environment variables section you can find how to change the configuration.
-
-### From source code
-
-> **Warning**
-> Installing from source code only works for x64 architecture. For other architectures see Docker images.
-
-- Install [Python 3.11](https://www.python.org/downloads/).
-- Install [Chrome](https://www.google.com/intl/en_us/chrome/) (all OS) or [Chromium](https://www.chromium.org/getting-involved/download-chromium/) (just Linux, it doesn't work in Windows) web browser.
-- (Only in Linux) Install [Xvfb](https://en.wikipedia.org/wiki/Xvfb) package.
-- (Only in macOS) Install [XQuartz](https://www.xquartz.org/) package.
-- Clone this repository and open a shell in that path.
-- Run `pip install -r requirements.txt` command to install FlareSolverr dependencies.
-- Run `python src/flaresolverr.py` command to start FlareSolverr.
-
-### From source code (FreeBSD/TrueNAS CORE)
-
-- Run `pkg install chromium python313 py311-pip xorg-vfbserver` command to install the required dependencies.
-- Clone this repository and open a shell in that path.
-- Run `python3.11 -m pip install -r requirements.txt` command to install FlareSolverr dependencies.
-- Run `python3.11 src/flaresolverr.py` command to start FlareSolverr.
-
-### Systemd service
-
-We provide an example Systemd unit file `flaresolverr.service` as reference. You have to modify the file to suit your needs: paths, user and environment variables.
-
-## Usage
-
-Example Bash request:
+For development or unsupported architectures. Requires Python 3.11, and both browsers if you want both engines:
 
 ```bash
-curl -L -X POST 'http://localhost:8191/v1' \
--H 'Content-Type: application/json' \
---data-raw '{
-  "cmd": "request.get",
-  "url": "http://www.google.com/",
-  "maxTimeout": 60000
-}'
+# install Python deps (pip, or `uv pip`)
+pip install -r requirements.txt
+
+# Chrome engine: install Chrome or Chromium (+ Xvfb on Linux)
+# Stealth engine: install Firefox libraries and fetch Camoufox
+playwright install-deps firefox
+python -m invisible_playwright fetch
+
+python src/flaresolverr.py
 ```
 
-Example Python request:
+Set `STEALTH_ENGINE=false` to run Chrome-only and skip the Camoufox/Firefox setup entirely.
 
-```py
+## Engines & fallback
+
+Choose the engine per request with the optional `engine` field, or set the default with `DEFAULT_ENGINE`.
+
+| Request `engine` | Behaviour                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| omitted / `auto` | Start on the engine that last cleared this host (or `DEFAULT_ENGINE`), then fall back to the other on failure. |
+| `chrome`         | Chrome only, no fallback.                                                                                      |
+| `stealth`        | Camoufox only, no fallback.                                                                                    |
+
+Fallback triggers when an engine throws (blocked / timeout), or returns a page that still looks like an unsolved challenge. Set `ENGINE_FALLBACK=false` to disable it.
+
+## Sessions & automatic cleanup
+
+A **session** keeps a browser alive between requests. The cleared `cf_clearance` cookie stays in that browser's memory, so follow-up requests to the same host skip the challenge and return in 1–3 s instead of re-solving. This is the main reliability and speed lever: solve once, reuse the cookie many times.
+
+Each engine keeps its own session pool under one shared session-id namespace; a session is bound to whichever engine created it (default Chrome). Create one with `sessions.create` and pass its `session` id on later requests.
+
+Clients often create a session and never destroy it (a mobile app can be killed before it could). To stop abandoned browsers leaking memory, Solverr runs a **background reaper** that:
+
+- closes any session idle longer than `SESSION_TTL_MINUTES` (default 30). Every request bumps the session's last-used time, so an in-use session is never reaped.
+- evicts the oldest-idle session once an engine exceeds `SESSION_MAX` (default 20).
+
+So `sessions.destroy` is good practice but optional — cleanup happens automatically.
+
+## API usage
+
+All requests are `POST http://localhost:8191/v1` with a JSON body and `Content-Type: application/json`.
+
+<details>
+<summary>Python & PowerShell examples</summary>
+
+```python
 import requests
-
-url = "http://localhost:8191/v1"
-headers = {"Content-Type": "application/json"}
-data = {
-    "cmd": "request.get",
-    "url": "http://www.google.com/",
-    "maxTimeout": 60000
-}
-response = requests.post(url, headers=headers, json=data)
-print(response.text)
+r = requests.post("http://localhost:8191/v1", json={
+    "cmd": "request.get", "url": "https://www.google.com/", "maxTimeout": 60000,
+})
+print(r.text)
 ```
 
-Example PowerShell request:
-
-```ps1
-$body = @{
-    cmd = "request.get"
-    url = "http://www.google.com/"
-    maxTimeout = 60000
-} | ConvertTo-Json
-
+```powershell
+$body = @{ cmd = "request.get"; url = "https://www.google.com/"; maxTimeout = 60000 } | ConvertTo-Json
 irm -UseBasicParsing 'http://localhost:8191/v1' -Headers @{"Content-Type"="application/json"} -Method Post -Body $body
 ```
 
-### Commands
+</details>
 
-#### + `sessions.create`
+### `sessions.create`
 
-This will launch a new browser instance which will retain cookies until you destroy it with `sessions.destroy`.
-This comes in handy, so you don't have to keep solving challenges over and over and you won't need to keep sending
-cookies for the browser to use.
+Launches a browser that retains cookies until you `sessions.destroy` it (or the reaper closes it). Reusing the session avoids re-solving challenges and re-launching browsers.
 
-This also speeds up the requests since it won't have to launch a new browser instance for every request.
+| Parameter | Notes                                                                                                                                                                                             |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| session   | Optional. Session id to assign. A random UUID is used if omitted.                                                                                                                                |
+| engine    | Optional. `chrome` (default) or `stealth`. Binds the session to that engine.                                                                                                                     |
+| proxy     | Optional. Eg `"proxy": {"url": "http://127.0.0.1:8888"}`. Schema required (`http://`, `socks4://`, `socks5://`). Auth supported: `{"url": "...", "username": "user", "password": "pass"}`. |
 
-| Parameter | Notes                                                                                                                                                                                                                                                                                                             |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| session   | Optional. The session ID that you want to be assigned to the instance. If isn't set a random UUID will be assigned.                                                                                                                                                                                               |
-| proxy     | Optional, default disabled. Eg: `"proxy": {"url": "http://127.0.0.1:8888"}`. You must include the proxy schema in the URL: `http://`, `socks4://` or `socks5://`. Authorization (username/password) is supported. Eg: `"proxy": {"url": "http://127.0.0.1:8888", "username": "testuser", "password": "testpass"}` |
+### `sessions.list`
 
-#### + `sessions.list`
-
-Returns a list of all the active sessions. More for debugging if you are curious to see how many sessions are running.
-You should always make sure to properly close each session when you are done using them as too many may slow your
-computer down.
-
-Example response:
+Returns the ids of all active sessions across both engines.
 
 ```json
-{
-  "sessions": ["session_id_1", "session_id_2", "session_id_3..."]
-}
+{ "status": "ok", "sessions": ["session_id_1", "session_id_2"] }
 ```
 
-#### + `sessions.destroy`
+### `sessions.destroy`
 
-This will properly shutdown a browser instance and remove all files associated with it to free up resources for a new
-session. When you no longer need to use a session you should make sure to close it.
+Shuts a session's browser down and frees its resources.
 
-| Parameter | Notes                                         |
-| --------- | --------------------------------------------- |
-| session   | The session ID that you want to be destroyed. |
+| Parameter | Notes                              |
+| --------- | ---------------------------------- |
+| session   | The session id to destroy.         |
 
-#### + `request.get`
+### `request.get`
 
-| Parameter           | Notes                                                                                                                                                                                                                                                                                                                                        |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| url                 | Mandatory                                                                                                                                                                                                                                                                                                                                    |
-| session             | Optional. Will send the request from and existing browser instance. If one is not sent it will create a temporary instance that will be destroyed immediately after the request is completed.                                                                                                                                                |
-| session_ttl_minutes | Optional. FlareSolverr will automatically rotate expired sessions based on the TTL provided in minutes.                                                                                                                                                                                                                                      |
-| maxTimeout          | Optional, default value 60000. Max timeout to solve the challenge in milliseconds.                                                                                                                                                                                                                                                           |
-| cookies             | Optional. Will be used by the headless browser. Eg: `"cookies": [{"name": "cookie1", "value": "value1"}, {"name": "cookie2", "value": "value2"}]`.                                                                                                                                                                                           |
-| returnOnlyCookies   | Optional, default false. Only returns the cookies. Response data, headers and other parts of the response are removed.                                                                                                                                                                                                                       |
-| returnScreenshot    | Optional, default false. Captures a screenshot of the final rendered page after all challenges and waits are completed. The screenshot is returned as a Base64-encoded PNG string in the `screenshot` field of the response.                                                                                                                 |
-| proxy               | Optional, default disabled. Eg: `"proxy": {"url": "http://127.0.0.1:8888"}`. You must include the proxy schema in the URL: `http://`, `socks4://` or `socks5://`. Authorization (username/password) is not supported. (When the `session` parameter is set, the proxy is ignored; a session specific proxy can be set in `sessions.create`.) |
-| waitInSeconds       | Optional, default none. Length to wait in seconds after solving the challenge, and before returning the results. Useful to allow it to load dynamic content.                                                                                                                                                                                 |
-| disableMedia        | Optional, default false. When true FlareSolverr will prevent media resources (images, CSS, and fonts) from being loaded to speed up navigation.                                                                                                                                                                                              |
-| tabs_till_verify    | Optional, default none. Number of times the `Tab` button is needed to be pressed to end up on the turnstile captcha, in order to verify it. After verifying the captcha, the result will be stored in the solution under `turnstile_token`.                                                                                                  |
+| Parameter           | Notes                                                                                                                                                             |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| url                 | Mandatory.                                                                                                                                                       |
+| engine              | Optional. `chrome`, `stealth`, or `auto` (default). See [Engines & fallback](#engines--fallback).                                                                |
+| session             | Optional. Reuse an existing browser instance. Without it, a temporary instance is created and destroyed after the request.                                      |
+| session_ttl_minutes | Optional. Recreate the session if it is older than this many minutes.                                                                                            |
+| maxTimeout          | Optional, default 60000. Max time to solve the challenge, in milliseconds.                                                                                       |
+| cookies             | Optional. Cookies to set before loading. Eg `"cookies": [{"name": "a", "value": "1"}]`.                                                                          |
+| returnOnlyCookies   | Optional, default false. Return only cookies; drop response body and headers.                                                                                    |
+| returnScreenshot    | Optional, default false. Return a Base64 PNG of the final page in the `screenshot` field.                                                                        |
+| proxy               | Optional. Same shape as in `sessions.create`. Ignored when `session` is set (use a session proxy instead).                                                       |
+| waitInSeconds       | Optional. Extra seconds to wait after solving, before returning (lets dynamic content load).                                                                     |
+| disableMedia        | Optional, default false. Block images, CSS and fonts to speed up navigation.                                                                                     |
+| tabs_till_verify    | Optional (Chrome engine only). Number of `Tab` presses to reach a Turnstile checkbox; the resulting token is returned in `solution.turnstile_token`. The stealth engine detects Turnstile automatically and does not need this. |
 
-> **Warning**
-> If you want to use Cloudflare clearance cookie in your scripts, make sure you use the FlareSolverr User-Agent too. If they don't match you will see the challenge.
+> **Reusing cookies?** Use the User-Agent Solverr returns (`solution.userAgent`) in your own requests. If the UA and `cf_clearance` don't match, Cloudflare re-challenges you.
 
-Example response from running the `curl` above:
+Example response (truncated):
 
 ```json
 {
-  "solution": {
-    "url": "https://www.google.com/?gws_rd=ssl",
-    "status": 200,
-    "headers": {
-      "status": "200",
-      "date": "Thu, 16 Jul 2020 04:15:49 GMT",
-      "expires": "-1",
-      "cache-control": "private, max-age=0",
-      "content-type": "text/html; charset=UTF-8",
-      "strict-transport-security": "max-age=31536000",
-      "p3p": "CP=\"This is not a P3P policy! See g.co/p3phelp for more info.\"",
-      "content-encoding": "br",
-      "server": "gws",
-      "content-length": "61587",
-      "x-xss-protection": "0",
-      "x-frame-options": "SAMEORIGIN",
-      "set-cookie": "1P_JAR=2020-07-16-04; expires=Sat..."
-    },
-    "response": "<!DOCTYPE html>...",
-    "cookies": [
-      {
-        "name": "NID",
-        "value": "204=QE3Ocq15XalczqjuDy52HeseG3zAZuJzID3R57...",
-        "domain": ".google.com",
-        "path": "/",
-        "expires": 1610684149.307722,
-        "size": 178,
-        "httpOnly": true,
-        "secure": true,
-        "session": false,
-        "sameSite": "None"
-      },
-      {
-        "name": "1P_JAR",
-        "value": "2020-07-16-04",
-        "domain": ".google.com",
-        "path": "/",
-        "expires": 1597464949.307626,
-        "size": 19,
-        "httpOnly": false,
-        "secure": true,
-        "session": false,
-        "sameSite": "None"
-      }
-    ],
-    "userAgent": "Windows NT 10.0; Win64; x64) AppleWebKit/5...",
-    "turnstile_token": "03AGdBq24k3lK7JH2v8uN1T5F..."
-  },
   "status": "ok",
-  "message": "",
+  "message": "Challenge solved!",
+  "solution": {
+    "url": "https://www.google.com/",
+    "status": 200,
+    "headers": { "content-type": "text/html; charset=UTF-8" },
+    "response": "<!DOCTYPE html>...",
+    "cookies": [ { "name": "cf_clearance", "value": "...", "domain": ".google.com", "path": "/" } ],
+    "userAgent": "Mozilla/5.0 ...",
+    "turnstile_token": null
+  },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "1.0.0"
+  "version": "3.5.0"
 }
 ```
 
-### + `request.post`
+### `request.post`
 
-This works like `request.get`, with the addition of the postData parameter. Note that `tabs_till_verify` is currently supported only for GET requests and requires one extra argument.
+Like `request.get`, plus `postData`.
 
-| Parameter | Notes                                                                    |
+| Parameter | Notes                                                                     |
 | --------- | ------------------------------------------------------------------------ |
-| postData  | Must be a string with `application/x-www-form-urlencoded`. Eg: `a=b&c=d` |
+| postData  | A string in `application/x-www-form-urlencoded` form. Eg `a=b&c=d`.       |
 
-## Environment variables
+## Configuration
 
-| Name               | Default                | Notes                                                                                                                                    |
-| ------------------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| LOG_LEVEL          | info                   | Verbosity of the logging. Use `LOG_LEVEL=debug` for more information.                                                                    |
-| LOG_FILE           | none                   | Path to capture log to file. Example: `/config/flaresolverr.log`.                                                                         |
-| LOG_HTML           | false                  | Only for debugging. If `true` all HTML that passes through the proxy will be logged to the console in `debug` level.                     |
-| PROXY_URL          | none                   | URL for proxy. Will be overwritten by `request` or `sessions` proxy, if used. Example: `http://127.0.0.1:8080`.                          |
-| PROXY_USERNAME     | none                   | Username for proxy. Will be overwritten by `request` or `sessions` proxy, if used. Example: `testuser`.                                  |
-| PROXY_PASSWORD     | none                   | Password for proxy. Will be overwritten by `request` or `sessions` proxy, if used. Example: `testpass`.                                  |
-| CAPTCHA_SOLVER     | none                   | Captcha solving method. It is used when a captcha is encountered. See the Captcha Solvers section.                                       |
-| TZ                 | UTC                    | Timezone used in the logs and the web browser. Example: `TZ=Europe/London`.                                                              |
-| LANG               | none                   | Language used in the web browser. Example: `LANG=en_GB`.                                                                                 |
-| HEADLESS           | true                   | Only for debugging. To run the web browser in headless mode or visible.                                                                  |
-| DISABLE_MEDIA      | false                  | To disable loading images, CSS, and other media in the web browser to save network bandwidth.                                            |
-| TEST_URL           | https://www.google.com | FlareSolverr makes a request on start to make sure the web browser is working. You can change that URL if it is blocked in your country. |
-| PORT               | 8191                   | Listening port. You don't need to change this if you are running on Docker.                                                              |
-| HOST               | 0.0.0.0                | Listening interface. You don't need to change this if you are running on Docker.                                                         |
-| PROMETHEUS_ENABLED | false                  | Enable Prometheus exporter. See the Prometheus section below.                                                                            |
-| PROMETHEUS_PORT    | 8192                   | Listening port for Prometheus exporter. See the Prometheus section below.                                                                |
+All settings are environment variables and all are optional.
 
-Environment variables are set differently depending on the operating system. Some examples:
+### Engines
 
-- Docker: Take a look at the Docker section in this document. Environment variables can be set in the `docker-compose.yml` file or in the Docker CLI command.
-- Linux: Run `export LOG_LEVEL=debug` and then run `flaresolverr` in the same shell.
-- Windows: Open `cmd.exe`, run `set LOG_LEVEL=debug` and then run `flaresolverr.exe` in the same shell.
+| Variable               | Default     | Description                                                                    |
+| ---------------------- | ----------- | ----------------------------------------------------------------------------- |
+| `DEFAULT_ENGINE`       | `chrome`    | Engine for requests that don't set `engine` (`chrome` \| `stealth` \| `auto`). |
+| `STEALTH_ENGINE`       | `true`      | Load the Camoufox engine. Set `false` for a lighter, Chrome-only runtime.      |
+| `ENGINE_FALLBACK`      | `true`      | Retry the other engine when the first fails or returns an unsolved challenge.   |
+| `STEALTH_HEADLESS`     | `true`      | Run Camoufox headless.                                                          |
+| `STEALTH_MAX_ATTEMPTS` | unlimited   | Click-solver attempts per request (bounded by `maxTimeout`).                    |
+| `STEALTH_START_TIMEOUT`| `120`       | Seconds allowed to launch a Camoufox browser.                                   |
+
+### Sessions & cleanup
+
+| Variable                  | Default | Description                                                              |
+| ------------------------- | ------- | ----------------------------------------------------------------------- |
+| `SESSION_TTL_MINUTES`     | `30`    | Idle minutes before the reaper closes a session's browser (`0` disables). |
+| `SESSION_MAX`             | `20`    | Max concurrent sessions per engine before oldest-idle eviction.          |
+| `REAPER_INTERVAL_SECONDS` | `60`    | How often the reaper scans.                                              |
+
+### Proxy
+
+| Variable         | Default | Description                                                                       |
+| ---------------- | ------- | -------------------------------------------------------------------------------- |
+| `PROXY_URL`      | none    | Upstream proxy for both engines. Eg `http://127.0.0.1:8080`. Overridden by a per-request/session `proxy`. |
+| `PROXY_USERNAME` | none    | Proxy username.                                                                  |
+| `PROXY_PASSWORD` | none    | Proxy password.                                                                  |
+
+### Optional paid CAPTCHA fallback
+
+Free click-solving clears the vast majority of challenges, including Turnstile/Managed. This is insurance for the rare site that escalates further: it sends that challenge to a paid solving service (2captcha / CapSolver, ~$3 per 1000 solves) **only after** free solving has failed, and does nothing until you configure it.
+
+| Variable                  | Default          | Description                                                           |
+| ------------------------- | ---------------- | -------------------------------------------------------------------- |
+| `CAPTCHA_SOLVER`          | `none`           | Provider: `none`, `2captcha`, `capsolver`, or another 2captcha-compatible service. |
+| `CAPTCHA_API_KEY`         | none             | API key. The solver stays dormant unless this **and** a provider are set. |
+| `CAPTCHA_API_URL`         | provider default | Override the 2captcha-compatible host.                               |
+| `CAPTCHA_API_MAX_ATTEMPTS`| `3`              | Polling attempts against the service.                               |
+
+### Browser, logging & server
+
+| Variable             | Default   | Description                                                                    |
+| -------------------- | --------- | ----------------------------------------------------------------------------- |
+| `HEADLESS`           | `true`    | Run the Chrome engine headless (visible only for debugging).                   |
+| `DISABLE_MEDIA`      | `false`   | Block images/CSS/fonts by default to save bandwidth (both engines).            |
+| `LANG`               | none      | Chrome browser language. Eg `LANG=en_GB`.                                       |
+| `LOG_LEVEL`          | `info`    | `info` or `debug`.                                                             |
+| `LOG_FILE`           | none      | Also write logs to this file. Eg `/config/solverr.log`.                        |
+| `LOG_HTML`           | `false`   | Debug only: log all page HTML at `debug` level.                                |
+| `HOST` / `PORT`      | `0.0.0.0` / `8191` | Listening interface and port. Rarely changed under Docker.           |
+| `TZ`                 | `UTC`     | Container timezone (affects log timestamps). Eg `TZ=Europe/London`.            |
+| `PROMETHEUS_ENABLED` | `false`   | Enable the Prometheus exporter (see below).                                    |
+| `PROMETHEUS_PORT`    | `8192`    | Exporter port (expose it if enabled).                                          |
+
+## Proxy & reliability
+
+No solver beats Cloudflare by fingerprint alone — **IP reputation dominates**. A datacenter/VPS IP fails far more challenges than a residential one. If a site keeps failing on **both** engines, the single most effective fix is a residential proxy: set `PROXY_URL` (and credentials), or pass `proxy` per request/session.
+
+Rough guide to expected latency: Chrome solves take a few seconds; Camoufox solves take ~10–20 s (the price of clearing challenges Chromium can't). Session reuse brings follow-ups on the same host down to ~1–3 s.
 
 ## Prometheus exporter
 
-The Prometheus exporter for FlareSolverr is disabled by default. It can be enabled with the environment variable `PROMETHEUS_ENABLED`. If you are using Docker make sure you expose the `PROMETHEUS_PORT`.
+Disabled by default. Enable with `PROMETHEUS_ENABLED=true` and expose `PROMETHEUS_PORT` (default 8192). Metrics include per-domain request counts, results, and duration histograms.
 
-Example metrics:
+## Troubleshooting
 
-```shell
-# HELP flaresolverr_request_total Total requests with result
-# TYPE flaresolverr_request_total counter
-flaresolverr_request_total{domain="nowsecure.nl",result="solved"} 1.0
-# HELP flaresolverr_request_created Total requests with result
-# TYPE flaresolverr_request_created gauge
-flaresolverr_request_created{domain="nowsecure.nl",result="solved"} 1.690141657157109e+09
-# HELP flaresolverr_request_duration Request duration in seconds
-# TYPE flaresolverr_request_duration histogram
-flaresolverr_request_duration_bucket{domain="nowsecure.nl",le="0.0"} 0.0
-flaresolverr_request_duration_bucket{domain="nowsecure.nl",le="10.0"} 1.0
-flaresolverr_request_duration_bucket{domain="nowsecure.nl",le="25.0"} 1.0
-flaresolverr_request_duration_bucket{domain="nowsecure.nl",le="50.0"} 1.0
-flaresolverr_request_duration_bucket{domain="nowsecure.nl",le="+Inf"} 1.0
-flaresolverr_request_duration_count{domain="nowsecure.nl"} 1.0
-flaresolverr_request_duration_sum{domain="nowsecure.nl"} 5.858
-# HELP flaresolverr_request_duration_created Request duration in seconds
-# TYPE flaresolverr_request_duration_created gauge
-flaresolverr_request_duration_created{domain="nowsecure.nl"} 1.6901416571570296e+09
-```
+**A source shows no results but the log says `Challenge not detected!` with a 200.** An engine loaded the page but couldn't recognise a newer managed/Turnstile challenge and returned it as if solved. Solverr's auto-fallback is designed to catch this and retry on the other engine; make sure `ENGINE_FALLBACK` is on and the stealth engine is enabled. If it still fails, the site is likely gating on your IP — add a residential proxy.
 
-## Captcha Solvers
+**Out-of-memory / browser launch errors (Proxmox LXC, low-RAM hosts).** Give the container more shared memory: `shm_size: 512mb` in `docker-compose.yml` (or `--shm-size=512m`). Reduce `SESSION_MAX` and keep `SESSION_TTL_MINUTES` modest so idle browsers are freed sooner.
 
-> **Warning**
-> At this time none of the captcha solvers work. You can check the status in the open issues. Any help is welcome.
+**Camoufox / Firefox errors on ARM or NAS devices.** Stealth-engine support on ARM/NAS is best-effort. If it won't launch, set `STEALTH_ENGINE=false` to run Chrome-only.
 
-Sometimes CloudFlare not only gives mathematical computations and browser tests, sometimes they also require the user to
-solve a captcha.
-If this is the case, FlareSolverr will return the error `Captcha detected but no automatic solver is configured.`
-
-FlareSolverr can be customized to solve the CAPTCHA automatically by setting the environment variable `CAPTCHA_SOLVER`
-to the file name of one of the adapters inside the `/captcha` directory.
-
-## Related projects
-
-- C# implementation => https://github.com/FlareSolverr/FlareSolverrSharp
-
+**Cloudflare has blocked this request / IP banned.** Your IP is flagged for that site. Try a (residential) proxy, or open the site in a normal browser from the same network to confirm.

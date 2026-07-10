@@ -1,0 +1,302 @@
+"""Chrome engine: Selenium + vendored undetected_chromedriver.
+
+This is FlareSolverr's original solving path, moved behind the Engine interface
+unchanged in behavior. It stays the default engine because it empirically clears
+the target sites best and already supports sessions, POST, cookie injection and
+screenshots.
+"""
+import logging
+import time
+from datetime import timedelta
+
+from func_timeout import FunctionTimedOut, func_timeout
+from selenium.common import TimeoutException
+from selenium.webdriver.chrome.webdriver import WebDriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.expected_conditions import (
+    presence_of_element_located, staleness_of, title_is)
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.wait import WebDriverWait
+
+import utils
+from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
+                       CHALLENGE_TITLES, CHALLENGE_SELECTORS, TURNSTILE_SELECTORS)
+from dtos import V1RequestBase
+from engines.base import Engine, SolveResult
+from postform import build_post_html
+
+SHORT_TIMEOUT = 1
+
+
+class ChromeEngine(Engine):
+    """Solve challenges with a real Chromium driven by undetected_chromedriver."""
+
+    name = "chrome"
+
+    def __init__(self, sessions):
+        # Unified SessionsStorage; Chrome sessions hold a live WebDriver.
+        self._sessions = sessions
+
+    def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
+        driver = None
+        try:
+            if req.session:
+                session_id = req.session
+                ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
+                session, fresh = self._sessions.get(session_id, ttl)
+
+                if fresh:
+                    logging.debug(f"new session created to perform the request (session_id={session_id})")
+                else:
+                    logging.debug(f"existing session is used to perform the request (session_id={session_id}, "
+                                  f"lifetime={str(session.lifetime())}, ttl={str(ttl)})")
+
+                driver = session.driver
+            else:
+                driver = utils.get_webdriver(req.proxy)
+                logging.debug('New instance of webdriver has been created to perform the request')
+            return func_timeout(timeout, self._evil_logic, (req, driver, method))
+        except FunctionTimedOut:
+            raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
+        except Exception as e:
+            raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
+        finally:
+            if not req.session and driver is not None:
+                if utils.PLATFORM_VERSION == "nt":
+                    driver.close()
+                driver.quit()
+                logging.debug('A used instance of webdriver has been destroyed')
+
+    def _evil_logic(self, req: V1RequestBase, driver: WebDriver, method: str) -> SolveResult:
+        message = ""
+
+        # optionally block resources like images/css/fonts using CDP
+        disable_media = utils.get_config_disable_media()
+        if req.disableMedia is not None:
+            disable_media = req.disableMedia
+        if disable_media:
+            block_urls = [
+                # Images
+                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp", "*.svg", "*.ico",
+                "*.PNG", "*.JPG", "*.JPEG", "*.GIF", "*.WEBP", "*.BMP", "*.SVG", "*.ICO",
+                "*.tiff", "*.tif", "*.jpe", "*.apng", "*.avif", "*.heic", "*.heif",
+                "*.TIFF", "*.TIF", "*.JPE", "*.APNG", "*.AVIF", "*.HEIC", "*.HEIF",
+                # Stylesheets
+                "*.css",
+                "*.CSS",
+                # Fonts
+                "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+                "*.WOFF", "*.WOFF2", "*.TTF", "*.OTF", "*.EOT"
+            ]
+            try:
+                logging.debug("Network.setBlockedURLs: %s", block_urls)
+                driver.execute_cdp_cmd("Network.enable", {})
+                driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": block_urls})
+            except Exception:
+                # if CDP commands are not available or fail, ignore and continue
+                logging.debug("Network.setBlockedURLs failed or unsupported on this webdriver")
+
+        # navigate to the page
+        logging.debug(f"Navigating to... {req.url}")
+        turnstile_token = None
+
+        if method == "POST":
+            _post_request(req, driver)
+        else:
+            if req.tabs_till_verify is None:
+                driver.get(req.url)
+            else:
+                turnstile_token = _resolve_turnstile_captcha(req, driver)
+
+        # set cookies if required
+        if req.cookies is not None and len(req.cookies) > 0:
+            logging.debug(f'Setting cookies...')
+            for cookie in req.cookies:
+                driver.delete_cookie(cookie['name'])
+                driver.add_cookie(cookie)
+            # reload the page
+            if method == 'POST':
+                _post_request(req, driver)
+            else:
+                driver.get(req.url)
+
+        # wait for the page
+        if utils.get_config_log_html():
+            logging.debug(f"Response HTML:\n{driver.page_source}")
+        html_element = driver.find_element(By.TAG_NAME, "html")
+        page_title = driver.title
+
+        # find access denied titles
+        for title in ACCESS_DENIED_TITLES:
+            if page_title.startswith(title):
+                raise Exception('Cloudflare has blocked this request. '
+                                'Probably your IP is banned for this site, check in your web browser.')
+        # find access denied selectors
+        for selector in ACCESS_DENIED_SELECTORS:
+            found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            if len(found_elements) > 0:
+                raise Exception('Cloudflare has blocked this request. '
+                                'Probably your IP is banned for this site, check in your web browser.')
+
+        # find challenge by title
+        challenge_found = False
+        for title in CHALLENGE_TITLES:
+            if title.lower() == page_title.lower():
+                challenge_found = True
+                logging.info("Challenge detected. Title found: " + page_title)
+                break
+        if not challenge_found:
+            # find challenge by selectors
+            for selector in CHALLENGE_SELECTORS:
+                found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if len(found_elements) > 0:
+                    challenge_found = True
+                    logging.info("Challenge detected. Selector found: " + selector)
+                    break
+
+        attempt = 0
+        if challenge_found:
+            while True:
+                try:
+                    attempt = attempt + 1
+                    # wait until the title changes
+                    for title in CHALLENGE_TITLES:
+                        logging.debug("Waiting for title (attempt " + str(attempt) + "): " + title)
+                        WebDriverWait(driver, SHORT_TIMEOUT).until_not(title_is(title))
+
+                    # then wait until all the selectors disappear
+                    for selector in CHALLENGE_SELECTORS:
+                        logging.debug("Waiting for selector (attempt " + str(attempt) + "): " + selector)
+                        WebDriverWait(driver, SHORT_TIMEOUT).until_not(
+                            presence_of_element_located((By.CSS_SELECTOR, selector)))
+
+                    # all elements not found
+                    break
+
+                except TimeoutException:
+                    logging.debug("Timeout waiting for selector")
+
+                    click_verify(driver)
+
+                    # update the html (cloudflare reloads the page every 5 s)
+                    html_element = driver.find_element(By.TAG_NAME, "html")
+
+            # waits until cloudflare redirection ends
+            logging.debug("Waiting for redirect")
+            # noinspection PyBroadException
+            try:
+                WebDriverWait(driver, SHORT_TIMEOUT).until(staleness_of(html_element))
+            except Exception:
+                logging.debug("Timeout waiting for redirect")
+
+            logging.info("Challenge solved!")
+            message = "Challenge solved!"
+        else:
+            logging.info("Challenge not detected!")
+            message = "Challenge not detected!"
+
+        result = SolveResult()
+        result.url = driver.current_url
+        result.status = 200  # todo: fix, selenium not provides this info
+        result.cookies = driver.get_cookies()
+        result.user_agent = utils.get_user_agent(driver)
+        result.turnstile_token = turnstile_token
+        result.message = message
+
+        if not req.returnOnlyCookies:
+            result.headers = {}  # todo: fix, selenium not provides this info
+
+            if req.waitInSeconds and req.waitInSeconds > 0:
+                logging.info("Waiting " + str(req.waitInSeconds) + " seconds before returning the response...")
+                time.sleep(req.waitInSeconds)
+
+            result.response = driver.page_source
+
+        if req.returnScreenshot:
+            result.screenshot = driver.get_screenshot_as_base64()
+
+        return result
+
+
+def click_verify(driver: WebDriver, num_tabs: int = 1):
+    try:
+        logging.debug("Try to find the Cloudflare verify checkbox...")
+        actions = ActionChains(driver)
+        actions.pause(5)
+        for _ in range(num_tabs):
+            actions.send_keys(Keys.TAB).pause(0.1)
+        actions.pause(1)
+        actions.send_keys(Keys.SPACE).perform()
+
+        logging.debug(f"Cloudflare verify checkbox clicked after {num_tabs} tabs!")
+    except Exception:
+        logging.debug("Cloudflare verify checkbox not found on the page.")
+    finally:
+        driver.switch_to.default_content()
+
+    try:
+        logging.debug("Try to find the Cloudflare 'Verify you are human' button...")
+        button = driver.find_element(
+            by=By.XPATH,
+            value="//input[@type='button' and @value='Verify you are human']",
+        )
+        if button:
+            actions = ActionChains(driver)
+            actions.move_to_element_with_offset(button, 5, 7)
+            actions.click(button)
+            actions.perform()
+            logging.debug("The Cloudflare 'Verify you are human' button found and clicked!")
+    except Exception:
+        logging.debug("The Cloudflare 'Verify you are human' button not found on the page.")
+
+    time.sleep(2)
+
+
+def _get_turnstile_token(driver: WebDriver, tabs: int):
+    token_input = driver.find_element(By.CSS_SELECTOR, "input[name='cf-turnstile-response']")
+    current_value = token_input.get_attribute("value")
+    while True:
+        click_verify(driver, num_tabs=tabs)
+        turnstile_token = token_input.get_attribute("value")
+        if turnstile_token:
+            if turnstile_token != current_value:
+                logging.info(f"Turnstile token: {turnstile_token}")
+                return turnstile_token
+        logging.debug(f"Failed to extract token possibly click failed")
+
+        # reset focus
+        driver.execute_script("""
+            let el = document.createElement('button');
+            el.style.position='fixed';
+            el.style.top='0';
+            el.style.left='0';
+            document.body.prepend(el);
+            el.focus();
+        """)
+        time.sleep(1)
+
+
+def _resolve_turnstile_captcha(req: V1RequestBase, driver: WebDriver):
+    turnstile_token = None
+    if req.tabs_till_verify is not None:
+        logging.debug(f'Navigating to... {req.url} in order to pass the turnstile challenge')
+        driver.get(req.url)
+
+        turnstile_challenge_found = False
+        for selector in TURNSTILE_SELECTORS:
+            found_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            if len(found_elements) > 0:
+                turnstile_challenge_found = True
+                logging.info("Turnstile challenge detected. Selector found: " + selector)
+                break
+        if turnstile_challenge_found:
+            turnstile_token = _get_turnstile_token(driver=driver, tabs=req.tabs_till_verify)
+        else:
+            logging.debug(f'Turnstile challenge not found')
+    return turnstile_token
+
+
+def _post_request(req: V1RequestBase, driver: WebDriver):
+    html_content = build_post_html(req.url, req.postData)
+    driver.get("data:text/html;charset=utf-8," + html_content)

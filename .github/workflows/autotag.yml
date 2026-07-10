@@ -1,16 +1,19 @@
 name: Autotag
 
+# Creates a `v<version>` tag when the version in package.json changes on main.
+# Uses a Personal Access Token (GH_PAT secret) rather than GITHUB_TOKEN so the
+# pushed tag triggers release.yml and release-docker.yml (tags pushed with the
+# built-in GITHUB_TOKEN do not trigger other workflows).
+
 on:
   push:
-    branches:
-      - "master"
+    branches: [main]
 
 jobs:
   tag-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Auto tag
         uses: Klemensas/action-autotag@stable

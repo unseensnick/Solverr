@@ -1,76 +1,63 @@
 name: Bug report
-description: Create a report of your issue
+description: Report a problem with Solverr
+labels: [bug]
 body:
-- type: checkboxes
-  attributes:
-    label: Have you checked our README?
-    description: Please check the <a href="https://github.com/FlareSolverr/FlareSolverr/blob/master/README.md">README</a>.
-    options:
-      - label: I have checked the README
-        required: true
-- type: checkboxes
-  attributes:
-    label: Have you followed our Troubleshooting?
-    description: Please follow our <a href="https://github.com/FlareSolverr/FlareSolverr/wiki/Troubleshooting">Troubleshooting</a>.
-    options:
-      - label: I have followed your Troubleshooting
-        required: true
-- type: checkboxes
-  attributes:
-    label: Is there already an issue for your problem?
-    description: Please make sure you are not creating an already submitted <a href="https://github.com/FlareSolverr/FlareSolverr/issues">Issue</a>. Check closed issues as well, because your issue may have already been fixed.
-    options:
-      - label: I have checked older issues, open and closed
-        required: true
-- type: checkboxes
-  attributes:
-    label: Have you checked the discussions?
-    description: Please read our <a href="https://github.com/FlareSolverr/FlareSolverr/discussions">Discussions</a> before submitting your issue, some wider problems may be dealt with there.
-    options:
-      - label: I have read the Discussions
-        required: true
-- type: input
-  attributes:
-    label: Have you ACTUALLY checked all these?
-    description: Please do not waste our time and yours; these checks are there for a reason, it is not just so you can tick boxes for fun. If you type <b>YES</b> and it is clear you did not or have put in no effort, your issue will be closed and locked without comment. If you type <b>NO</b> but still open this issue, you will be permanently blocked for timewasting.
-    placeholder: YES or NO
-  validations:
-    required: true
-- type: textarea
-  attributes:
-    label: Environment
-    description: Please provide the details of the system FlareSolverr is running on.
-    value: |
-      - FlareSolverr version:
-      - Last working FlareSolverr version:
-      - Operating system:
-      - Are you using Docker: [yes/no]
-      - FlareSolverr User-Agent (see log traces or / endpoint):
-      - Are you using a VPN: [yes/no]
-      - Are you using a Proxy: [yes/no]
-      - URL to test this issue:
-    render: markdown
-  validations:
-    required: true
-- type: textarea
-  attributes:
-    label: Description
-    description: List steps to reproduce the error and details on what happens and what you expected to happen.
-  validations:
-    required: true
-- type: textarea
-  attributes:
-    label: Logged Error Messages
-    description: |
-      Place any relevant error messages you noticed from the logs here.
-      Make sure you attach the full logs with your personal information removed in case we need more information.
-      If you wish to provide debug logs, follow the instructions from this <a href="https://github.com/FlareSolverr/FlareSolverr/wiki/How-to-enable-debug-and-html-trace">wiki page</a>.
-    render: text
-  validations:
-    required: true
-- type: textarea
-  attributes:
-    label: Screenshots
-    description: Place any screenshots of the issue here if needed
-  validations:
-    required: false
+  - type: markdown
+    attributes:
+      value: Thanks for the report. Please skim the README (including its Troubleshooting section) and search existing issues first.
+  - type: checkboxes
+    attributes:
+      label: Before you start
+      options:
+        - label: I've read the README and its Troubleshooting section
+          required: true
+        - label: I've searched existing open and closed issues
+          required: true
+        - label: I can open the target site in a normal browser from the same network/IP
+          required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine was involved?
+      options:
+        - "auto (default)"
+        - "chrome"
+        - "stealth"
+        - "not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - Solverr version / image tag:
+        - Install method: [docker compose / docker run / source]
+        - OS / architecture:
+        - Using a proxy: [no / datacenter / residential]
+      render: markdown
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Example URL that fails
+      placeholder: https://example.com
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `docker logs solverr` (set `LOG_LEVEL=debug` for more). Remove any personal info.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: docker-compose / config (optional)
+      render: yaml

@@ -1,7 +1,6 @@
 {
-  "name": "flaresolverr",
-  "version": "3.5.0",
-  "description": "Proxy server to bypass Cloudflare protection",
-  "author": "Diego Heras (ngosang / ngosang@hotmail.es)",
+  "name": "solverr",
+  "version": "1.0.0",
+  "description": "Cloudflare/DDoS-GUARD bypass proxy with dual solving engines (Chrome + Camoufox) and automatic fallback. Fork of FlareSolverr.",
   "license": "MIT"
 }
