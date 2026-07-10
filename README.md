@@ -270,3 +270,7 @@ Disabled by default. Enable with `PROMETHEUS_ENABLED=true` and expose `PROMETHEU
 **Camoufox / Firefox errors on ARM or NAS devices.** Stealth-engine support on ARM/NAS is best-effort. If it won't launch, set `STEALTH_ENGINE=false` to run Chrome-only.
 
 **Cloudflare has blocked this request / IP banned.** Your IP is flagged for that site. Try a (residential) proxy, or open the site in a normal browser from the same network to confirm.
+
+## License
+
+Solverr is licensed under the **GNU General Public License v3.0** (see [LICENSE](LICENSE)). It began as a fork of [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) (MIT) and its stealth engine derives from [Byparr](https://github.com/ThePhaseless/Byparr) (GPL-3.0); because Byparr is copyleft, the combined work is GPL-3.0. Upstream copyright notices are preserved in [NOTICE](NOTICE).

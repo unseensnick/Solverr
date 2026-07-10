@@ -20,3 +20,4 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - Dual-browser Docker image (Chromium + Camoufox) with a ghcr publishing workflow for amd64/arm64.
 - Rewrote the README and repo workflows/issue templates for the fork; switched to Solverr's own SemVer.
 - Fixed logging being suppressed after the stealth libraries loaded (no output reached `docker logs`).
+- Relicensed under GPL-3.0 (Byparr's copyleft license, the stricter of the two upstreams); FlareSolverr's MIT notice preserved in `NOTICE`.

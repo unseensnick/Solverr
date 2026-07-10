@@ -1,0 +1,46 @@
+Solverr
+Copyright (c) 2026 unseensnick
+
+Solverr is licensed under the GNU General Public License v3.0 (see LICENSE).
+
+This program combines code under two upstream licenses. Per GPL-3.0, the whole
+combined work is distributed under GPL-3.0; the notices below are preserved as
+their original licenses require.
+
+================================================================================
+FlareSolverr  (MIT License)  --  https://github.com/FlareSolverr/FlareSolverr
+================================================================================
+Solverr began as a fork of FlareSolverr, and the Chrome engine, HTTP API, and
+much of the surrounding code derive from it. FlareSolverr's MIT notice is
+retained here as MIT requires:
+
+    MIT License
+
+    Copyright (c) 2025 Diego Heras (ngosang / ngosang@hotmail.es)
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+================================================================================
+Byparr  (GNU GPL v3.0)  --  https://github.com/ThePhaseless/Byparr
+================================================================================
+Solverr's stealth engine (Camoufox via invisible_playwright + playwright-captcha)
+is derived from Byparr, which is licensed under GPL-3.0. Because Byparr is
+copyleft, the combined Solverr work is licensed under GPL-3.0.
+
+    Byparr, Copyright (c) ThePhaseless
