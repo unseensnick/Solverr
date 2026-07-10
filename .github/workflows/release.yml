@@ -1,37 +1,66 @@
 name: Release
 
-# Creates a GitHub Release with an auto-generated changelog when a version tag
-# is pushed. Docker images are published separately by release-docker.yml.
+# Creates a GitHub Release when a version tag is pushed. Notes come from the
+# matching CHANGELOG.md [version] section (never [Unreleased]): the bold headline
+# of each Additions/Changes/Fixes entry becomes a one-line note, while Other
+# entries (no bold) pass through in full. The detail sentences stay in the file,
+# linked below. Docker images are published separately by release-docker.yml.
 
 on:
   push:
     tags: ["v*.*.*"]
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
 jobs:
   create-release:
     name: Create release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Build changelog
-        id: changelog
+      - name: Install parse-changelog
+        uses: taiki-e/install-action@parse-changelog
+
+      - name: Prepare release body
         run: |
-          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          range=${prev:+$prev..HEAD}
+          set -e
+          version="${GITHUB_REF_NAME#v}"
+          # Notes come ONLY from the matching [version] section (cut by renaming
+          # [Unreleased] to [version]); no [Unreleased] fallback, so unreleased
+          # work never leaks into a stable release.
+          if ! changelog="$(parse-changelog CHANGELOG.md "$version" 2>/dev/null)"; then
+            echo "::error::CHANGELOG.md has no [$version] section. Rename [Unreleased] to [$version] (and add a fresh empty [Unreleased]) before tagging v$version."
+            exit 1
+          fi
+          # "- **Headline.** detail" -> "- Headline."  and  "**Sub-header**" -> "#### Sub-header".
+          # Other entries have no bold, so they pass through in full.
+          highlights="$(printf '%s\n' "$changelog" \
+            | sed -E -e 's/^- \*\*([^*]+)\*\*.*/- \1/' -e 's/^\*\*([^*]+)\*\*$/#### \1/')"
+          prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          repo="${{ github.server_url }}/${{ github.repository }}"
           {
-            echo "changelog<<EOF"
-            git log $range --no-merges --oneline
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+            echo "RELEASE_BODY<<__EOF__"
+            printf '%s\n\n' "$highlights"
+            printf '**Full changelog:** %s/blob/main/CHANGELOG.md\n' "$repo"
+            if [ -n "$prev" ]; then
+              printf '**Changes since %s:** %s/compare/%s...%s\n' "$prev" "$repo" "$prev" "$GITHUB_REF_NAME"
+            fi
+            echo "__EOF__"
+          } >> "$GITHUB_ENV"
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.changelog.outputs.changelog }}
+          tag_name: ${{ github.ref_name }}
+          name: Solverr ${{ github.ref_name }}
+          body: ${{ env.RELEASE_BODY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
