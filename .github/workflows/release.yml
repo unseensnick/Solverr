@@ -1,14 +1,25 @@
 name: Release
 
-# Creates a GitHub Release when a version tag is pushed. Notes come from the
-# matching CHANGELOG.md [version] section (never [Unreleased]): the bold headline
-# of each Additions/Changes/Fixes entry becomes a one-line note, while Other
-# entries (no bold) pass through in full. The detail sentences stay in the file,
-# linked below. Docker images are published separately by release-docker.yml.
+# Creates a GitHub Release with notes from the matching CHANGELOG.md [version]
+# section (never [Unreleased]): the bold headline of each Additions/Changes/Fixes
+# entry becomes a one-line note, Other entries pass through in full. The detail
+# stays in the file, linked below. Docker images are published separately by
+# release-docker.yml.
+#
+# Triggered by pushing a `v*.*.*` tag, or manually from the Actions tab
+# (workflow_dispatch) with a version + optional note.
 
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, no leading v (e.g. 1.2.3)"
+        required: true
+      message:
+        description: "Optional note shown at the top of the release body"
+        required: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -26,39 +37,52 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Resolve version tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install parse-changelog
         uses: taiki-e/install-action@parse-changelog
 
       - name: Prepare release body
+        env:
+          TAG: ${{ steps.vars.outputs.tag }}
+          MESSAGE: ${{ github.event.inputs.message }}
         run: |
           set -e
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           # Notes come ONLY from the matching [version] section (cut by renaming
           # [Unreleased] to [version]); no [Unreleased] fallback, so unreleased
           # work never leaks into a stable release.
           if ! changelog="$(parse-changelog CHANGELOG.md "$version" 2>/dev/null)"; then
-            echo "::error::CHANGELOG.md has no [$version] section. Rename [Unreleased] to [$version] (and add a fresh empty [Unreleased]) before tagging v$version."
+            echo "::error::CHANGELOG.md has no [$version] section. Rename [Unreleased] to [$version] (and add a fresh empty [Unreleased]) before releasing v$version."
             exit 1
           fi
           # "- **Headline.** detail" -> "- Headline."  and  "**Sub-header**" -> "#### Sub-header".
           # Other entries have no bold, so they pass through in full.
           highlights="$(printf '%s\n' "$changelog" \
             | sed -E -e 's/^- \*\*([^*]+)\*\*.*/- \1/' -e 's/^\*\*([^*]+)\*\*$/#### \1/')"
-          prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           repo="${{ github.server_url }}/${{ github.repository }}"
           {
+            if [ -n "$MESSAGE" ]; then printf '%s\n\n' "$MESSAGE"; fi
             printf '%s\n\n' "$highlights"
             printf '**Full changelog:** %s/blob/main/CHANGELOG.md\n' "$repo"
             if [ -n "$prev" ]; then
-              printf '**Changes since %s:** %s/compare/%s...%s\n' "$prev" "$repo" "$prev" "$GITHUB_REF_NAME"
+              printf '**Changes since %s:** %s/compare/%s...%s\n' "$prev" "$repo" "$prev" "$TAG"
             fi
           } > release_body.md
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Solverr ${{ github.ref_name }}
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: Solverr ${{ steps.vars.outputs.tag }}
           body_path: release_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

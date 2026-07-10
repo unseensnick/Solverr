@@ -73,6 +73,13 @@ RUN mkdir -p "/app/.config/chromium/Crash Reports/pending"
 COPY src .
 COPY package.json ../
 
+# Links the ghcr package to the repo (so the package page shows this README)
+# and records license/description. release-docker.yml also injects these via
+# docker/metadata-action.
+LABEL org.opencontainers.image.source="https://github.com/unseensnick/Solverr" \
+      org.opencontainers.image.description="Cloudflare/DDoS-GUARD bypass proxy with dual solving engines (Chrome + Camoufox) and automatic fallback" \
+      org.opencontainers.image.licenses="GPL-3.0-only"
+
 EXPOSE 8191
 EXPOSE 8192
 
