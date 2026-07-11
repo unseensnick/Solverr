@@ -154,6 +154,10 @@ if __name__ == "__main__":
         config.reaper_interval_seconds(),
     ).start()
 
+    # start the optional passthrough proxy (dormant unless PASSTHROUGH_ENABLED)
+    import passthrough
+    passthrough.start()
+
     # start bootle plugins
     # plugin order is important
     app.install(logger_plugin)

@@ -107,3 +107,35 @@ def captcha_api_server() -> str:
 
 def captcha_api_max_attempts() -> int:
     return _int_env('CAPTCHA_API_MAX_ATTEMPTS', 3)
+
+
+# ---- Optional passthrough proxy (dormant unless enabled) ---------------------
+
+def passthrough_enabled() -> bool:
+    """Serve solved page bodies over plain HTTP on a second port. A client that
+    would otherwise re-fetch the URL itself (tripping Cloudflare's fingerprinting
+    on that replay) points at this port and consumes the solved HTML directly, so
+    it never sees a challenge. Off by default."""
+    return _bool('PASSTHROUGH_ENABLED', False)
+
+
+def passthrough_port() -> int:
+    return _int_env('PASSTHROUGH_PORT', 8888)
+
+
+def passthrough_allowed_hosts() -> list:
+    """Hosts the passthrough may fetch (the upstream is taken from the first path
+    segment). Anything not listed is refused, so the listener is never a blind
+    open proxy. Comma-separated; empty means refuse every request."""
+    raw = os.environ.get('PASSTHROUGH_ALLOWED_HOSTS', '')
+    return [h.strip().lower() for h in raw.split(',') if h.strip()]
+
+
+def passthrough_cache_ttl() -> int:
+    """Seconds to cache a solved 2xx body (0 disables caching)."""
+    return _int_env('PASSTHROUGH_CACHE_TTL', 3600)
+
+
+def passthrough_timeout_ms() -> int:
+    """maxTimeout handed to the solver for each passthrough request."""
+    return _int_env('PASSTHROUGH_TIMEOUT_MS', 120000)

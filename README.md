@@ -260,6 +260,18 @@ Free click-solving clears the vast majority of challenges, including Turnstile/M
 | `CAPTCHA_API_URL`         | provider default | Override the 2captcha-compatible host.                               |
 | `CAPTCHA_API_MAX_ATTEMPTS`| `3`              | Polling attempts against the service.                               |
 
+### Optional passthrough proxy
+
+A second HTTP port that returns solved page bodies directly, for clients that would otherwise re-fetch the URL themselves (see [Passthrough proxy](#passthrough-proxy)). Off by default.
+
+| Variable                   | Default   | Description                                                                    |
+| -------------------------- | --------- | ----------------------------------------------------------------------------- |
+| `PASSTHROUGH_ENABLED`      | `false`   | Turn the passthrough listener on.                                              |
+| `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = refuse every request, so it's never a blind open proxy. |
+| `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
+| `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
+| `PASSTHROUGH_TIMEOUT_MS`   | `120000`  | `maxTimeout` handed to the solver per request.                                 |
+
 ### Browser, logging & server
 
 | Variable             | Default   | Description                                                                    |
@@ -280,6 +292,42 @@ Free click-solving clears the vast majority of challenges, including Turnstile/M
 No solver beats Cloudflare by fingerprint alone — **IP reputation dominates**. A datacenter/VPS IP fails far more challenges than a residential one. If a site keeps failing on **both** engines, the single most effective fix is a residential proxy: set `PROXY_URL` (and credentials), or pass `proxy` per request/session.
 
 Rough guide to expected latency: Chrome solves take a few seconds; Camoufox solves take ~10–20 s (the price of clearing challenges Chromium can't). Session reuse brings follow-ups on the same host down to ~1–3 s.
+
+## Passthrough proxy
+
+Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges — so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
+
+The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches.
+
+**The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS` (anything else gets a `403`, so it is never a blind open proxy). A request to:
+
+```
+http://solverr:8888/example-site.tld/some/path/1/
+```
+
+is solved as `https://example-site.tld/some/path/1/`.
+
+Enable it with:
+
+```yaml
+    environment:
+      - PASSTHROUGH_ENABLED=true
+      - PASSTHROUGH_ALLOWED_HOSTS=example-site.tld,mirror.example.tld
+```
+
+Containers on the same Docker network reach it by service name (`http://solverr:8888/...`) without publishing a host port. To make a client's Base URL offer several mirror domains (like a stock indexer definition does), give it one entry per mirror, each prefixed with the passthrough:
+
+```
+http://solverr:8888/example-site.tld/
+http://solverr:8888/mirror.example.tld/
+```
+
+Notes and limits:
+
+- **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
+- Encode the mirror as a **bare host** (`example-site.tld`), not `https://…` — clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
+- Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
+- It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
 
 ## Prometheus exporter
 

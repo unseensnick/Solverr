@@ -4,6 +4,9 @@ services:
     container_name: solverr
     ports:
       - "${PORT:-8191}:8191"
+      # Passthrough proxy. Only needed to reach it from the host; containers on
+      # the same Docker network reach it by service name without publishing.
+      # - "${PASSTHROUGH_PORT:-8888}:8888"
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_HTML=${LOG_HTML:-false}
@@ -24,6 +27,14 @@ services:
       - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}       # none | 2captcha | capsolver
       # - CAPTCHA_API_KEY=${CAPTCHA_API_KEY:-}
       # - CAPTCHA_API_URL=${CAPTCHA_API_URL:-}        # override 2captcha-compatible host
+      # --- Optional passthrough proxy (dormant unless enabled) -------------
+      - PASSTHROUGH_ENABLED=${PASSTHROUGH_ENABLED:-false}   # serve solved bodies over plain HTTP
+      # Comma-separated hosts the passthrough may fetch (the upstream is the first
+      # path segment). Empty = refuse everything, so it's never a blind open proxy.
+      # - PASSTHROUGH_ALLOWED_HOSTS=${PASSTHROUGH_ALLOWED_HOSTS:-}
+      # - PASSTHROUGH_PORT=${PASSTHROUGH_PORT:-8888}
+      # - PASSTHROUGH_CACHE_TTL=${PASSTHROUGH_CACHE_TTL:-3600}     # seconds; 0 disables
+      # - PASSTHROUGH_TIMEOUT_MS=${PASSTHROUGH_TIMEOUT_MS:-120000}
     # Chromium is stable with more shared memory; Camoufox benefits too.
     shm_size: 512mb
     restart: unless-stopped

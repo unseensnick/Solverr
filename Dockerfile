@@ -82,6 +82,8 @@ LABEL org.opencontainers.image.source="https://github.com/unseensnick/Solverr" \
 
 EXPOSE 8191
 EXPOSE 8192
+# Optional passthrough proxy (PASSTHROUGH_ENABLED=true); default PASSTHROUGH_PORT.
+EXPOSE 8888
 
 # dumb-init avoids zombie chromium processes
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]

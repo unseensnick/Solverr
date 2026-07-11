@@ -44,3 +44,11 @@ is derived from Byparr, which is licensed under GPL-3.0. Because Byparr is
 copyleft, the combined Solverr work is licensed under GPL-3.0.
 
     Byparr, Copyright (c) ThePhaseless
+
+================================================================================
+byparr-proxy  --  https://github.com/guyg2232/byparr-proxy
+================================================================================
+Solverr's optional passthrough proxy is an independent reimplementation of the
+approach demonstrated by byparr-proxy: serving a solved page body directly so a
+client never replays the request Cloudflare re-challenges. No byparr-proxy code
+is included; credited here as the source of the idea
