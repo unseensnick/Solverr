@@ -4,6 +4,14 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Fixes
+
+- **Following a site's own links through the passthrough now works.** A root-relative link (a details page, the next page) is routed to the default mirror instead of being refused, so downloads and pagination succeed.
+
+### Other
+
+- Passthrough no longer logs a traceback when a client disconnects mid-response.
+
 ## [1.1.0]
 
 ### Additions

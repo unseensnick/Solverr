@@ -5,8 +5,12 @@ otherwise re-fetch the URL itself, and trip Cloudflare's fingerprinting on that
 replay, instead points at this port and consumes the solved HTML directly, so it
 never sees a challenge. The upstream host is taken from the first path segment
 and must be listed in PASSTHROUGH_ALLOWED_HOSTS, so this is never a blind open
-proxy. Requests are solved in-process through the same controller as /v1,
-reusing engine selection, fallback, sessions, and per-host memory.
+proxy. A path whose first segment is not an allow-listed host is treated as a
+site-internal absolute link (e.g. /details/...) and routed to the default mirror
+(the first allow-listed host), so a client following the site's own links still
+comes back through the proxy. Requests are solved in-process through the same
+controller as /v1, reusing engine selection, fallback, sessions, and per-host
+memory.
 
 The passthrough approach was demonstrated by the byparr-proxy project
 (https://github.com/guyg2232/byparr-proxy); this is an independent
@@ -34,6 +38,7 @@ _SKIP_EXT = re.compile(
 
 # Populated once by start() from config, so each request avoids re-reading env.
 _ALLOWED_HOSTS = set()
+_DEFAULT_HOST = None
 _CACHE_TTL = 0
 _TIMEOUT_MS = 120000
 
@@ -104,12 +109,17 @@ class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _send(self, status: int, body: bytes = b""):
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if self.command != "HEAD" and body:
-            self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD" and body:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionError):
+            # Client (e.g. Prowlarr) gave up and closed the socket mid-write,
+            # usually after its own request timeout. Nothing to send to.
+            logging.debug("[pt] client disconnected before the response completed")
 
     def _handle(self):
         rid = uuid.uuid4().hex[:6]
@@ -125,10 +135,21 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404)
             return
         if host not in _ALLOWED_HOSTS:
-            logging.warning("[pt %s] %s %s -> 403 (host '%s' not in PASSTHROUGH_ALLOWED_HOSTS)",
-                            rid, self.command, raw, host)
-            self._send(403, b"host not allowed")
-            return
+            if "." in host:
+                # Looks like a hostname but isn't allow-listed: a mirror the
+                # deployer forgot to add to PASSTHROUGH_ALLOWED_HOSTS.
+                logging.warning("[pt %s] %s %s -> 403 (host '%s' not in PASSTHROUGH_ALLOWED_HOSTS)",
+                                rid, self.command, raw, host)
+                self._send(403, b"host not allowed")
+                return
+            # A site-internal absolute link (e.g. /details/...) that resolved
+            # against the origin and lost its mirror segment. Route it to the
+            # default mirror with the path intact so downloads and pagination work.
+            if _DEFAULT_HOST is None:
+                self._send(404)
+                return
+            host = _DEFAULT_HOST
+            remainder = raw if raw.startswith("/") else "/" + raw
 
         target = "https://" + host + remainder
         now = time.monotonic()
@@ -204,15 +225,18 @@ def start():
     if not config.passthrough_enabled():
         return
 
-    global _ALLOWED_HOSTS, _CACHE_TTL, _TIMEOUT_MS
-    _ALLOWED_HOSTS = set(config.passthrough_allowed_hosts())
+    global _ALLOWED_HOSTS, _DEFAULT_HOST, _CACHE_TTL, _TIMEOUT_MS
+    hosts = config.passthrough_allowed_hosts()
+    _ALLOWED_HOSTS = set(hosts)
+    # First allow-listed host is the mirror used for site-internal absolute links.
+    _DEFAULT_HOST = hosts[0] if hosts else None
     _CACHE_TTL = config.passthrough_cache_ttl()
     _TIMEOUT_MS = config.passthrough_timeout_ms()
     port = config.passthrough_port()
 
     logging.info("Passthrough proxy enabled on port %d", port)
-    if _ALLOWED_HOSTS:
-        logging.info("  allowed hosts: %s", ", ".join(sorted(_ALLOWED_HOSTS)))
+    if hosts:
+        logging.info("  allowed hosts: %s (default: %s)", ", ".join(hosts), _DEFAULT_HOST)
     else:
         logging.warning("  PASSTHROUGH_ALLOWED_HOSTS is empty; every request is refused (403)")
     logging.info("  cache ttl: %ds, request timeout: %dms", _CACHE_TTL, _TIMEOUT_MS)

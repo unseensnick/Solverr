@@ -302,10 +302,12 @@ The passthrough removes the replay step. Point the client at Solverr's passthrou
 **The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS` (anything else gets a `403`, so it is never a blind open proxy). A request to:
 
 ```
-http://solverr:8888/example-site.tld/some/path/1/
+http://<solverr-host>:8888/example-site.tld/some/path/1/
 ```
 
-is solved as `https://example-site.tld/some/path/1/`.
+is solved as `https://example-site.tld/some/path/1/`. Replace `<solverr-host>` with wherever Solverr actually runs: its Docker **service/container name** (e.g. `solverr`) if the client is on the same Docker network, otherwise Solverr's **host IP or hostname**. `8888` is `PASSTHROUGH_PORT`.
+
+A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites.
 
 Enable it with:
 
@@ -315,12 +317,22 @@ Enable it with:
       - PASSTHROUGH_ALLOWED_HOSTS=example-site.tld,mirror.example.tld
 ```
 
-Containers on the same Docker network reach it by service name (`http://solverr:8888/...`) without publishing a host port. To make a client's Base URL offer several mirror domains (like a stock indexer definition does), give it one entry per mirror, each prefixed with the passthrough:
+On the same Docker network the client reaches it by service name with no published port; from another host, publish `PASSTHROUGH_PORT` and use Solverr's IP. To make a client's Base URL offer several mirror domains (like a stock indexer definition does), give it one entry per mirror, each prefixed with the passthrough:
 
 ```
-http://solverr:8888/example-site.tld/
-http://solverr:8888/mirror.example.tld/
+http://<solverr-host>:8888/example-site.tld/
+http://<solverr-host>:8888/mirror.example.tld/
 ```
+
+### Wiring up an indexer (Prowlarr/Jackett)
+
+You don't need a bundled indexer file. Take the site's existing definition from the [Prowlarr Indexers repo](https://github.com/Prowlarr/Indexers) (or Jackett's), make three changes, and drop it in your manager's custom-definitions folder:
+
+1. Change `id:` and `name:` to something unique (e.g. append `-passthrough`), so it sits alongside the stock one.
+2. Replace the `links:` block with one entry per mirror, each prefixed with the passthrough: `- http://<solverr-host>:8888/<that-mirror-host>/`.
+3. Add every one of those mirror hosts to `PASSTHROUGH_ALLOWED_HOSTS`.
+
+Then add the indexer in the manager, pick a mirror as the **Base URL**, and **do not attach a FlareSolverr/proxy tag** — the passthrough already does the solving, and a proxy tag would route around it. Everything else in the definition (search paths, selectors, categories) stays untouched.
 
 Notes and limits:
 
