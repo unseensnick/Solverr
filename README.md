@@ -9,6 +9,14 @@ Solverr is a proxy server to bypass Cloudflare and DDoS-GUARD protection. It fus
 
 It speaks the exact FlareSolverr `/v1` API on port `8191`, so it is a drop-in replacement: existing clients (the *arr stack, manga/novel readers, etc.) work unchanged.
 
+Beyond the two engines, it keeps **[sessions](#sessions--automatic-cleanup)** warm so repeat requests to a host skip the challenge, and adds an optional **[passthrough proxy](#passthrough-proxy)** for clients (indexer managers and the like) that re-fetch the URL themselves.
+
+## Contents
+
+- **Getting started** — [How it works](#how-it-works) · [Quick start](#quick-start) · [Installation](#installation)
+- **Using it** — [Engines & fallback](#engines--fallback) · [Sessions & cleanup](#sessions--automatic-cleanup) · [API usage](#api-usage) · [Passthrough proxy](#passthrough-proxy)
+- **Reference** — [Configuration](#configuration) · [Proxy & reliability](#proxy--reliability) · [Prometheus exporter](#prometheus-exporter) · [Troubleshooting](#troubleshooting)
+
 ## How it works
 
 Solverr waits for requests in an idle state. When one arrives it opens the URL in a real browser, waits until the challenge is solved (or the timeout is hit), and returns the page HTML plus the cookies. Those cookies (e.g. `cf_clearance`, `__ddg2_`) can then be reused by any HTTP client to reach the site directly.
@@ -25,37 +33,7 @@ Chrome engine  →  Camoufox click-solve  →  (optional) paid CAPTCHA API
 
 ## Quick start
 
-```bash
-docker compose up -d --build      # builds the dual-browser image (~2.3 GB)
-```
-
-Then point your client at `http://<host>:8191` and send a request:
-
-```bash
-curl -sX POST 'http://localhost:8191/v1' \
-  -H 'Content-Type: application/json' \
-  --data '{ "cmd": "request.get", "url": "https://www.google.com/", "maxTimeout": 60000 }'
-```
-
-## Installation
-
-### Docker (recommended)
-
-The browsers are bundled in the image, so Docker is the easiest path. A `docker-compose.yml` is provided; edit the environment block to taste and run `docker compose up -d --build`.
-
-Or with the Docker CLI (build the image once, then run it):
-
-```bash
-docker build -t solverr .
-docker run -d \
-  --name=solverr \
-  -p 8191:8191 \
-  --shm-size=512m \
-  --restart unless-stopped \
-  solverr
-```
-
-**Run the published image instead** (no local build) — save as `docker-compose.yml` and `docker compose up -d`:
+Run the published image (no build) and send your first request. Save this as `docker-compose.yml`:
 
 ```yaml
 services:
@@ -64,22 +42,48 @@ services:
     container_name: solverr
     ports:
       - "8191:8191"
-    environment:
-      - DEFAULT_ENGINE=chrome     # chrome | stealth | auto
-      - ENGINE_FALLBACK=true
-      - TZ=UTC
-      # See Configuration below for the full env list.
     shm_size: 512mb
     restart: unless-stopped
+    # See Configuration for the full environment list.
 ```
 
-Or with the CLI: `docker run -d --name solverr -p 8191:8191 --shm-size=512m --restart unless-stopped ghcr.io/unseensnick/solverr:latest`.
+```bash
+docker compose up -d
+curl -sX POST 'http://localhost:8191/v1' \
+  -H 'Content-Type: application/json' \
+  --data '{ "cmd": "request.get", "url": "https://www.google.com/", "maxTimeout": 60000 }'
+```
+
+The response contains the solved page HTML and cookies. See [Configuration](#configuration) to tune engines, sessions, proxy, and the passthrough.
+
+## Installation
+
+### Docker (recommended)
+
+The browsers are bundled in the image, so Docker is the easiest path. [Quick start](#quick-start) runs the published image; the repo's `docker-compose.yml` is the same setup with the full annotated environment block.
+
+**Build the image locally** instead of pulling it:
+
+```bash
+docker compose up -d --build      # builds the dual-browser image (~2.3 GB)
+```
+
+**Docker CLI** (published image shown; run `docker build -t solverr .` first and swap the image name to run a local build):
+
+```bash
+docker run -d \
+  --name=solverr \
+  -p 8191:8191 \
+  --shm-size=512m \
+  --restart unless-stopped \
+  ghcr.io/unseensnick/solverr:latest
+```
 
 On a Debian **host**, make sure `libseccomp2` is 2.5.x (`sudo apt-cache policy libseccomp2`) or the browser may fail to start; update it and restart the Docker daemon.
 
 ### From source
 
-For development or unsupported architectures. Requires Python 3.11+ (the Docker image uses 3.14), and both browsers if you want both engines:
+For development or unsupported architectures. Requires Python 3.9+ (3.11+ recommended for the vendored undetected-chromedriver; the Docker image uses 3.14), and both browsers if you want both engines:
 
 ```bash
 # install Python deps (pip, or `uv pip`)
@@ -206,7 +210,7 @@ Example response (truncated):
   },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "3.5.0"
+  "version": "1.1.1"
 }
 ```
 
@@ -217,6 +221,59 @@ Like `request.get`, plus `postData`.
 | Parameter | Notes                                                                     |
 | --------- | ------------------------------------------------------------------------ |
 | postData  | A string in `application/x-www-form-urlencoded` form. Eg `a=b&c=d`.       |
+
+## Passthrough proxy
+
+Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges — so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
+
+The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches.
+
+**The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS` (anything else gets a `403`, so it is never a blind open proxy). A request to:
+
+```
+http://<solverr-host>:8888/example-site.tld/some/path/1/
+```
+
+is solved as `https://example-site.tld/some/path/1/`. Replace `<solverr-host>` with wherever Solverr actually runs: its Docker **service/container name** (e.g. `solverr`) if the client is on the same Docker network, otherwise Solverr's **host IP or hostname**. `8888` is `PASSTHROUGH_PORT`.
+
+A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites.
+
+Enable it with:
+
+```yaml
+    environment:
+      - PASSTHROUGH_ENABLED=true
+      - PASSTHROUGH_ALLOWED_HOSTS=example-site.tld,mirror.example.tld
+```
+
+On the same Docker network the client reaches it by service name with no published port; from another host, publish `PASSTHROUGH_PORT` and use Solverr's IP. To make a client's Base URL offer several mirror domains (like a stock indexer definition does), give it one entry per mirror, each prefixed with the passthrough:
+
+```
+http://<solverr-host>:8888/example-site.tld/
+http://<solverr-host>:8888/mirror.example.tld/
+```
+
+### Wiring up an indexer (Prowlarr/Jackett)
+
+You don't need a bundled indexer file. Take the site's existing definition from the [Prowlarr Indexers repo](https://github.com/Prowlarr/Indexers) (or Jackett's), make three changes, and drop it in your manager's custom-definitions folder:
+
+1. Change `id:` and `name:` to something unique (e.g. append `-passthrough`), so it sits alongside the stock one.
+2. Replace the `links:` block with one entry per mirror, each prefixed with the passthrough: `- http://<solverr-host>:8888/<that-mirror-host>/`.
+3. Add every one of those mirror hosts to `PASSTHROUGH_ALLOWED_HOSTS`.
+4. Save the file into the manager's custom-definitions folder (create it if it isn't there) and restart the manager:
+   - **Prowlarr**: `/config/Definitions/Custom/`. The `Custom` subfolder often doesn't exist yet, and Prowlarr **ignores** YAMLs placed directly in `Definitions/`, so create `Custom/` and put the file there.
+   - **Jackett**: its custom-definitions folder, which Jackett prints in its startup log (commonly `/config/Jackett/Indexers/custom/` on the linuxserver image); create it if missing.
+
+Then add the indexer in the manager, pick a mirror as the **Base URL**, and **do not attach a FlareSolverr/proxy tag** — the passthrough already does the solving, and a proxy tag would route around it. Everything else in the definition (search paths, selectors, categories) stays untouched.
+
+> **Grab the definition as a file, not via copy-paste.** A few definitions contain non-printable characters in their filters (a rare title-cleanup step); pasting through a chat or some editors silently strips them and breaks parsing ("No title provided" on every result). Download the raw file so the bytes stay intact.
+
+Notes and limits:
+
+- **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
+- Encode the mirror as a **bare host** (`example-site.tld`), not `https://…` — clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
+- Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
+- It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
 
 ## Configuration
 
@@ -292,54 +349,6 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 No solver beats Cloudflare by fingerprint alone — **IP reputation dominates**. A datacenter/VPS IP fails far more challenges than a residential one. If a site keeps failing on **both** engines, the single most effective fix is a residential proxy: set `PROXY_URL` (and credentials), or pass `proxy` per request/session.
 
 Rough guide to expected latency: Chrome solves take a few seconds; Camoufox solves take ~10–20 s (the price of clearing challenges Chromium can't). Session reuse brings follow-ups on the same host down to ~1–3 s.
-
-## Passthrough proxy
-
-Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges — so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
-
-The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches.
-
-**The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS` (anything else gets a `403`, so it is never a blind open proxy). A request to:
-
-```
-http://<solverr-host>:8888/example-site.tld/some/path/1/
-```
-
-is solved as `https://example-site.tld/some/path/1/`. Replace `<solverr-host>` with wherever Solverr actually runs: its Docker **service/container name** (e.g. `solverr`) if the client is on the same Docker network, otherwise Solverr's **host IP or hostname**. `8888` is `PASSTHROUGH_PORT`.
-
-A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites.
-
-Enable it with:
-
-```yaml
-    environment:
-      - PASSTHROUGH_ENABLED=true
-      - PASSTHROUGH_ALLOWED_HOSTS=example-site.tld,mirror.example.tld
-```
-
-On the same Docker network the client reaches it by service name with no published port; from another host, publish `PASSTHROUGH_PORT` and use Solverr's IP. To make a client's Base URL offer several mirror domains (like a stock indexer definition does), give it one entry per mirror, each prefixed with the passthrough:
-
-```
-http://<solverr-host>:8888/example-site.tld/
-http://<solverr-host>:8888/mirror.example.tld/
-```
-
-### Wiring up an indexer (Prowlarr/Jackett)
-
-You don't need a bundled indexer file. Take the site's existing definition from the [Prowlarr Indexers repo](https://github.com/Prowlarr/Indexers) (or Jackett's), make three changes, and drop it in your manager's custom-definitions folder:
-
-1. Change `id:` and `name:` to something unique (e.g. append `-passthrough`), so it sits alongside the stock one.
-2. Replace the `links:` block with one entry per mirror, each prefixed with the passthrough: `- http://<solverr-host>:8888/<that-mirror-host>/`.
-3. Add every one of those mirror hosts to `PASSTHROUGH_ALLOWED_HOSTS`.
-
-Then add the indexer in the manager, pick a mirror as the **Base URL**, and **do not attach a FlareSolverr/proxy tag** — the passthrough already does the solving, and a proxy tag would route around it. Everything else in the definition (search paths, selectors, categories) stays untouched.
-
-Notes and limits:
-
-- **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
-- Encode the mirror as a **bare host** (`example-site.tld`), not `https://…` — clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
-- Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
-- It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
 
 ## Prometheus exporter
 
