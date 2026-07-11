@@ -1,6 +1,6 @@
 {
   "name": "solverr",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Cloudflare/DDoS-GUARD bypass proxy with dual solving engines (Chrome + Camoufox) and automatic fallback. Fork of FlareSolverr.",
   "license": "GPL-3.0-only"
 }
