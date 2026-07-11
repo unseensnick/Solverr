@@ -1,14 +1,13 @@
 import logging
 import platform
-import re
 import sys
 import threading
 import time
 from urllib.parse import urlparse
 
 import config
+import detection
 import utils
-from detection import CHALLENGE_TITLES
 from dtos import (STATUS_ERROR, STATUS_OK, ChallengeResolutionResultT,
                   ChallengeResolutionT, HealthResponse, IndexResponse,
                   V1RequestBase, V1ResponseBase)
@@ -216,17 +215,6 @@ def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
 _DOMAIN_ENGINE = {}
 _DOMAIN_LOCK = threading.Lock()
 
-# Markers that indicate the returned HTML is still an unsolved challenge page,
-# even when an engine reported success ("Challenge not detected!"). Used to decide
-# whether to fall back to the other engine.
-_CHALLENGE_HTML_MARKERS = (
-    'cf-challenge-running',
-    'window._cf_chl_opt',
-    'challenge-platform',
-    'id="challenge-error',
-    'turnstile-wrapper',
-)
-
 
 def _available_engines() -> dict:
     engines = {CHROME_ENGINE.name: CHROME_ENGINE}
@@ -308,17 +296,7 @@ def _looks_challenged(result: SolveResult) -> bool:
     Catches the known failure where an engine reports success but hands back the
     "Just a moment..." page. Only applies when full HTML was returned.
     """
-    html = result.response
-    if not html:
-        return False
-    low = html.lower()
-    match = re.search(r'<title[^>]*>(.*?)</title>', low, re.S)
-    if match:
-        title = match.group(1).strip()
-        for challenge_title in CHALLENGE_TITLES:
-            if challenge_title.lower() in title:
-                return True
-    return any(marker in low for marker in _CHALLENGE_HTML_MARKERS)
+    return detection.looks_like_challenge_html(result.response)
 
 
 def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:

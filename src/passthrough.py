@@ -21,8 +21,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
+import detection
 import flaresolverr_service
-from detection import CHALLENGE_TITLES
 from dtos import STATUS_OK, V1RequestBase
 
 # Static assets a client never needs from us; forwarding each would waste a full
@@ -31,13 +31,6 @@ _SKIP_EXT = re.compile(
     r"\.(css|js|mjs|map|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|mp4|webm)(\?|$)",
     re.IGNORECASE,
 )
-
-# Strong signals that a RETURNED page is itself an unsolved interstitial, used to
-# keep such a page out of the cache. Deliberately narrower than the controller's
-# fallback heuristic: Cloudflare's benign "/cdn-cgi/challenge-platform/" beacon
-# rides along on solved pages too, so matching it here would stop every solved
-# page from ever being cached.
-_CHALLENGE_PAGE_MARKERS = ('id="challenge-form"', 'id="challenge-stage"', 'cf-challenge-running')
 
 # Populated once by start() from config, so each request avoids re-reading env.
 _ALLOWED_HOSTS = set()
@@ -78,21 +71,6 @@ def _split_host(raw_path: str):
     if not host or "?" in host or "#" in host:
         return None, None
     return host, remainder
-
-
-def _looks_unsolved(html: str) -> bool:
-    """Whether the returned HTML is itself an unsolved challenge page (so it must
-    not be cached). Matches the challenge title or challenge-form markers, not the
-    post-clearance beacon that solved pages also carry."""
-    if not html:
-        return False
-    low = html.lower()
-    match = re.search(r'<title[^>]*>(.*?)</title>', low, re.S)
-    if match:
-        title = match.group(1).strip()
-        if any(t.lower() in title for t in CHALLENGE_TITLES):
-            return True
-    return any(marker in low for marker in _CHALLENGE_PAGE_MARKERS)
 
 
 def _apply_env_proxy(req: V1RequestBase) -> None:
@@ -196,7 +174,7 @@ class _Handler(BaseHTTPRequestHandler):
         # block would otherwise be served from cache long after it cleared.
         cacheable = (
             _CACHE_TTL > 0 and 200 <= status < 300
-            and not _looks_unsolved(solution.response)
+            and not detection.looks_like_challenge_html(solution.response)
         )
         with _lock:
             _inflight.pop(raw, None)

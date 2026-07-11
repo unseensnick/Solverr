@@ -8,6 +8,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **A built-in passthrough proxy lets clients that would re-fetch the URL use the solved page directly.** Enable `PASSTHROUGH_ENABLED` with a host allow-list and point the client at the passthrough port; off by default.
 
+### Fixes
+
+- **Solved pages no longer trigger a redundant second solve.** Cloudflare's post-clearance beacon was mistaken for an unsolved challenge, so many requests fell back to the other engine and solved twice; sites that carry the beacon now solve about twice as fast.
+
 ## [1.0.0]
 
 ### Additions
