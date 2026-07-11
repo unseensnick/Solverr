@@ -4,6 +4,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.1.1]
+
 ### Fixes
 
 - **Following a site's own links through the passthrough now works.** A root-relative link (a details page, the next page) is routed to the default mirror instead of being refused, so downloads and pagination succeed.
