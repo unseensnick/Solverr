@@ -212,7 +212,7 @@ Example response (truncated):
   },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "1.1.1"
+  "version": "1.2.0"
 }
 ```
 
