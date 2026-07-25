@@ -6,11 +6,22 @@
 #               self-contained bold headline ending in . ! or ? (Other is exempt).
 # Tracked here as the source of truth; activate on a clone with:
 #   git config core.hooksPath .githooks
+#
+# Takes an optional commit range, so CI can run the identical checks over pushed
+# commits instead of a staging area it does not have:
+#   .githooks/pre-commit                 # staged changes (hook mode)
+#   .githooks/pre-commit main..HEAD      # every change in the range (CI mode)
 set -u
 problems=0
+range="${1:-}"
 
-staged() { git diff --cached --name-only | grep -qx "$1"; }
-added()  { git diff --cached -U0 -- "$1" | grep -E '^\+[^+]' | sed 's/^+//'; }
+if [ -n "$range" ]; then
+  staged() { git diff --name-only "$range" | grep -qx "$1"; }
+  added()  { git diff -U0 "$range" -- "$1" | grep -E '^\+[^+]' | sed 's/^+//'; }
+else
+  staged() { git diff --cached --name-only | grep -qx "$1"; }
+  added()  { git diff --cached -U0 -- "$1" | grep -E '^\+[^+]' | sed 's/^+//'; }
+fi
 
 # Heuristic, not a name list, so this file never becomes the thing it prevents. Extend locally via
 # .githooks/deny-names.local (one grep -E pattern per line, gitignored).

@@ -1,0 +1,74 @@
+# Runs the same checks as the local git hooks, so the standard holds on clones that
+# never ran `git config core.hooksPath .githooks` (and on anything pushed with
+# --no-verify). The hooks in .githooks/ are the single definition; this workflow
+# only feeds them a commit range instead of a staging area.
+name: Standards
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  standards:
+    name: Commit messages and docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the commit range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$PR_BASE"
+            head="$PR_HEAD"
+          else
+            base="${PUSH_BEFORE:-}"
+            head="$PUSH_HEAD"
+            # A new branch, a force push, or a first commit leaves no usable
+            # "before": check the tip commit alone rather than the whole history.
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base="$(git rev-parse "${head}~1" 2>/dev/null || echo "$head")"
+            fi
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "Checking ${base}..${head}"
+
+      - name: Commit messages
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD_SHA: ${{ steps.range.outputs.head }}
+        run: |
+          set -u
+          failed=0
+          # Merge commits are exempt in the hook itself; skipping them here keeps
+          # the log readable when a PR carries one.
+          for sha in $(git rev-list --no-merges "${BASE}..${HEAD_SHA}"); do
+            git log -1 --format=%B "$sha" > /tmp/commit-msg.txt
+            if ! bash .githooks/commit-msg /tmp/commit-msg.txt; then
+              echo "    ^ in commit $(git log -1 --format='%h %s' "$sha")"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Docs lint
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD_SHA: ${{ steps.range.outputs.head }}
+        run: bash .githooks/pre-commit "${BASE}..${HEAD_SHA}"
