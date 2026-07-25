@@ -382,7 +382,7 @@ class StealthEngine(Engine):
             if utils.get_config_log_html():
                 logging.debug(f"Response HTML:\n{await page.content()}")
 
-            kind, is_turnstile = await self._detect(page)
+            kind, is_turnstile = await self._detect_settled(page)
             if kind == "none":
                 # An async challenge or widget (e.g. a Turnstile injected via api.js
                 # after domcontentloaded) may not be in the DOM yet; settle and recheck.
@@ -390,7 +390,7 @@ class StealthEngine(Engine):
                     await page.wait_for_load_state("networkidle", timeout=_NETWORKIDLE_MS)
                 except Exception:
                     logging.debug("networkidle wait timed out")
-                kind, is_turnstile = await self._detect(page)
+                kind, is_turnstile = await self._detect_settled(page)
 
             if kind == "denied":
                 raise Exception('Cloudflare has blocked this request. '
@@ -418,7 +418,7 @@ class StealthEngine(Engine):
                                  config.captcha_provider())
                     await open_click_page()
                     await self._api_solve(page, captcha_type)
-                    solved = (await self._detect(page))[0] != "challenge"
+                    solved = (await self._detect_settled(page))[0] != "challenge"
 
                 if not solved:
                     raise Exception("Challenge still present after solving attempts")
@@ -542,7 +542,7 @@ class StealthEngine(Engine):
         loop = asyncio.get_running_loop()
         is_turnstile = captcha_type == CaptchaType.CLOUDFLARE_TURNSTILE
         while True:
-            kind = (await self._detect(page))[0]
+            kind = (await self._detect_settled(page))[0]
             if kind == "denied":
                 raise Exception('Cloudflare has blocked this request. '
                                 'Probably your IP is banned for this site, check in your web browser.')
@@ -569,7 +569,7 @@ class StealthEngine(Engine):
             # no widget to click, so its silence means nothing on its own.
             if is_turnstile and await self._turnstile_token(page):
                 return True
-            if (await self._detect(page))[0] != "challenge":
+            if (await self._detect_settled(page))[0] != "challenge":
                 return True
             if loop.time() >= deadline:
                 return False
@@ -577,9 +577,17 @@ class StealthEngine(Engine):
 
     async def _turnstile_token(self, page) -> Optional[str]:
         """Value of a standalone Turnstile input (the solved token), or None.
-        Uses get_attribute, which works even under a challenge page's CSP."""
-        el = await page.query_selector(TURNSTILE_SELECTORS[0])
-        return (await el.get_attribute("value")) if el else None
+
+        Uses get_attribute, which works even under a challenge page's CSP. A read
+        that races a navigation reports None, which only ever means "not solved
+        yet" to the caller, so the wait loop simply looks again.
+        """
+        try:
+            el = await page.query_selector(TURNSTILE_SELECTORS[0])
+            return (await el.get_attribute("value")) if el else None
+        except Exception:
+            logging.debug("turnstile token read raced a navigation", exc_info=True)
+            return None
 
     async def _api_solve(self, page, captcha_type) -> None:
         """Solve via a paid 2captcha-compatible service (2captcha / CapSolver / ...).
@@ -607,6 +615,23 @@ class StealthEngine(Engine):
             attempt_delay=5,
         ) as solver:
             await solver.solve_captcha(captcha_container=page, captcha_type=captcha_type)
+
+    async def _detect_settled(self, page) -> Tuple[str, bool]:
+        """``_detect``, retried once when the page moves under it.
+
+        A challenge navigates to the real page the moment it clears, and any
+        title/selector read in flight then dies with "Execution context was
+        destroyed". That is the challenge succeeding, not the request failing, so
+        look again once the new document is in place before giving up.
+        """
+        for attempt in (0, 1):
+            try:
+                return await self._detect(page)
+            except Exception as e:
+                if attempt:
+                    raise
+                logging.debug("detection raced a navigation, retrying: %s", e)
+                await asyncio.sleep(0.5)
 
     async def _detect(self, page) -> Tuple[str, bool]:
         """Return (kind, is_turnstile) where kind is 'denied' | 'challenge' | 'none'.
