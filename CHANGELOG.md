@@ -4,6 +4,14 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Additions
+
+- **A URL that serves a PDF now comes back as the actual file.** The stealth engine returns the PDF Base64-encoded with `solution.contentType: application/pdf` instead of the browser viewer's HTML, and the passthrough serves it under its real content type.
+
+### Fixes
+
+- **Interactive Turnstile checkboxes are now clicked reliably on the stealth engine.** Non-interactive interstitials already solved; this is the click-to-verify kind.
+
 ## [1.1.1]
 
 ### Fixes

@@ -32,6 +32,10 @@ from postform import build_post_html
 # request's maxTimeout via asyncio.wait_for in _do_solve.
 _NETWORKIDLE_MS = 5000
 
+# A returned document is base64-encoded on top of the raw bytes and copied again
+# by the JSON response, so cap what we are willing to pull into memory.
+_MAX_PDF_BYTES = 32 * 1024 * 1024
+
 # playwright-captcha logs each failed click attempt at ERROR, which is expected
 # and harmless for non-interactive interstitials (no checkbox to click). We handle
 # the solve outcome ourselves, so quiet its internal noise to keep logs readable.
@@ -94,8 +98,13 @@ class StealthContext:
             self.user_agent = await self.page.evaluate("() => navigator.userAgent")
         except Exception:
             logging.debug("could not capture stealth user agent", exc_info=True)
+        # PLAYWRIGHT, not CAMOUFOX: invisible_playwright drives its patched Firefox
+        # through Playwright's own driver, so playwright-captcha's Camoufox path
+        # (which routes init scripts through a browser addon we never load) would
+        # silently drop the shadow-root unlock the click-solver needs to reach a
+        # Turnstile checkbox. Mirrors Byparr's own switch.
         self._solver_cm = ClickSolver(
-            framework=FrameworkType.CAMOUFOX,
+            framework=FrameworkType.PLAYWRIGHT,
             page=self.page,
             max_attempts=config.stealth_max_attempts(),
             attempt_delay=1,
@@ -268,6 +277,24 @@ class StealthEngine(Engine):
                     await route.continue_()
             await page.route("**/*", block_handler)
 
+        # Track the last main-frame document response so we can tell what the page
+        # actually is. page.goto()'s own return value is not enough: after a solved
+        # challenge the real document arrives in a later navigation.
+        main_response = None
+
+        def remember_main_response(response):
+            nonlocal main_response
+            try:
+                # is_navigation_request() first: reading .frame raises for a request
+                # issued before its frame exists (the Turnstile iframe does this),
+                # and an exception here surfaces on an unrelated later call.
+                if response.request.is_navigation_request() and response.frame is page.main_frame:
+                    main_response = response
+            except Exception:
+                logging.debug("could not classify a response", exc_info=True)
+
+        page.on("response", remember_main_response)
+
         async def navigate():
             # timeout=0 defers to the outer asyncio.wait_for(maxTimeout) hard cap.
             # wait_until="domcontentloaded" avoids hanging on the full "load" event,
@@ -359,18 +386,70 @@ class StealthEngine(Engine):
                 if req.waitInSeconds and req.waitInSeconds > 0:
                     logging.info("Waiting %s seconds before returning the response...", req.waitInSeconds)
                     await asyncio.sleep(req.waitInSeconds)
-                result.response = await page.content()
+                pdf = await self._pdf_body(page, main_response)
+                if pdf is not None:
+                    result.response = pdf
+                    result.content_type = "application/pdf"
+                else:
+                    result.response = await page.content()
 
             if req.returnScreenshot:
                 result.screenshot = base64.b64encode(await page.screenshot()).decode("ascii")
 
             return result
         finally:
+            page.remove_listener("response", remember_main_response)
             if block_handler is not None:
                 try:
                     await page.unroute("**/*", block_handler)
                 except Exception:
                     logging.debug("unroute failed", exc_info=True)
+
+    async def _pdf_body(self, page, main_response) -> Optional[str]:
+        """Base64 of the raw PDF when the page is a PDF document, else None.
+
+        Firefox opens PDFs in its built-in viewer, so page.content() would hand
+        back the viewer's HTML instead of the file. The browser already
+        downloaded the bytes, so take them from the response it received.
+        """
+        if main_response is None:
+            return None
+        content_type = main_response.headers.get("content-type", "")
+        if not content_type.lower().startswith("application/pdf"):
+            return None
+        try:
+            data = await main_response.body()
+        except Exception:
+            logging.debug("PDF body no longer buffered, refetching", exc_info=True)
+            data = await self._refetch_pdf(page, main_response)
+        if data is None:
+            return None
+        if len(data) > _MAX_PDF_BYTES:
+            logging.warning("PDF is %d bytes, past the %d byte cap; returning the viewer page instead",
+                            len(data), _MAX_PDF_BYTES)
+            return None
+        return base64.b64encode(data).decode("ascii")
+
+    async def _refetch_pdf(self, page, main_response) -> Optional[bytes]:
+        """Re-download the PDF through the page's request context, or None.
+
+        This request is not the browser's, so Cloudflare can answer it with a
+        challenge page instead of the file. Only take the bytes when the second
+        response agrees it is a PDF, otherwise the caller would label an error
+        page 'application/pdf'.
+        """
+        try:
+            fetched = await page.request.fetch(main_response.url)
+            if fetched.ok and fetched.headers.get("content-type", "").lower().startswith("application/pdf"):
+                return await fetched.body()
+            logging.warning("PDF refetch answered %s (%s); returning the viewer page instead",
+                            fetched.status, fetched.headers.get("content-type", "unknown"))
+        except Exception as e:
+            # Message only, never exc_info: Playwright's call log repeats the
+            # request headers, which carry the solved cf_clearance cookie.
+            logging.warning("Could not refetch the PDF (%s); returning the viewer page instead",
+                            str(e).split("\nCall log:")[0].strip())
+        return None
 
     async def _wait_until_cleared(self, ctx: StealthContext, page, captcha_type, deadline) -> bool:
         """Wait for the Cloudflare challenge to clear, up to ``deadline``.
@@ -437,7 +516,7 @@ class StealthEngine(Engine):
             server=config.captcha_api_server(),
         )
         async with TwoCaptchaSolver(
-            framework=FrameworkType.CAMOUFOX,
+            framework=FrameworkType.PLAYWRIGHT,
             page=page,
             async_two_captcha_client=client,
             max_attempts=config.captcha_api_max_attempts(),

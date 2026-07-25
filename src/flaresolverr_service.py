@@ -351,6 +351,8 @@ def _to_challenge_resolution(result: SolveResult) -> ChallengeResolutionT:
         challenge_res.headers = result.headers
     if result.response is not None:
         challenge_res.response = result.response
+    if result.content_type is not None:
+        challenge_res.contentType = result.content_type
     if result.screenshot is not None:
         challenge_res.screenshot = result.screenshot
 

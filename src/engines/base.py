@@ -19,6 +19,10 @@ class SolveResult:
     ``headers``, ``response`` and ``screenshot`` stay ``None`` when not
     requested; the controller only serializes the fields that were populated,
     matching FlareSolverr's original response shape.
+
+    ``content_type`` stays ``None`` for ordinary HTML so those responses keep
+    that exact shape. An engine sets it only when ``response`` is not HTML (for
+    example base64 PDF bytes), so a client can tell what it received.
     """
     url: str = ""
     status: int = 200
@@ -27,6 +31,7 @@ class SolveResult:
     message: str = ""
     headers: Optional[dict] = None
     response: Optional[str] = None
+    content_type: Optional[str] = None
     screenshot: Optional[str] = None
     turnstile_token: Optional[str] = None
 

@@ -16,6 +16,7 @@ The passthrough approach was demonstrated by the byparr-proxy project
 (https://github.com/guyg2232/byparr-proxy); this is an independent
 reimplementation wired directly into the controller.
 """
+import base64
 import logging
 import os
 import re
@@ -42,19 +43,22 @@ _DEFAULT_HOST = None
 _CACHE_TTL = 0
 _TIMEOUT_MS = 120000
 
-_cache = {}       # request path -> (expires_monotonic, status, body_bytes)
+_HTML_CONTENT_TYPE = "text/html; charset=utf-8"
+
+_cache = {}       # request path -> (expires_monotonic, status, body_bytes, content_type)
 _inflight = {}    # request path -> _Pending
 _lock = threading.Lock()
 
 
 class _Pending:
     """Shared slot so concurrent requests for the same path wait on one solve."""
-    __slots__ = ("event", "status", "body", "error")
+    __slots__ = ("event", "status", "body", "content_type", "error")
 
     def __init__(self):
         self.event = threading.Event()
         self.status = None
         self.body = None
+        self.content_type = _HTML_CONTENT_TYPE
         self.error = None
 
 
@@ -94,24 +98,28 @@ def _apply_env_proxy(req: V1RequestBase) -> None:
 
 def _solve(target: str):
     """Solve `target` in-process via the controller. Returns (status, body_bytes,
-    solution). Raises on solver failure."""
+    content_type, solution). Raises on solver failure."""
     req = V1RequestBase({"cmd": "request.get", "url": target, "maxTimeout": _TIMEOUT_MS})
     _apply_env_proxy(req)
     res = flaresolverr_service.controller_v1_endpoint(req)
     if getattr(res, '__error_500__', False) or res.status != STATUS_OK or res.solution is None:
         raise RuntimeError(res.message or "solver returned an error")
     status = res.solution.status or 200
-    body = (res.solution.response or "").encode("utf-8", errors="replace")
-    return status, body, res.solution
+    raw = res.solution.response or ""
+    # A non-HTML document (currently only PDF) comes back base64-encoded, so
+    # decode it and serve the real bytes under their own content type.
+    if getattr(res.solution, 'contentType', None) == "application/pdf":
+        return status, base64.b64decode(raw), "application/pdf", res.solution
+    return status, raw.encode("utf-8", errors="replace"), _HTML_CONTENT_TYPE, res.solution
 
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def _send(self, status: int, body: bytes = b""):
+    def _send(self, status: int, body: bytes = b"", content_type: str = _HTML_CONTENT_TYPE):
         try:
             self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             if self.command != "HEAD" and body:
@@ -158,7 +166,7 @@ class _Handler(BaseHTTPRequestHandler):
             entry = _cache.get(raw)
             if entry and _CACHE_TTL > 0 and entry[0] > now:
                 logging.info("[pt %s] %s %s <- cache hit", rid, self.command, raw)
-                self._send(entry[1], entry[2])
+                self._send(entry[1], entry[2], entry[3])
                 return
             pending = _inflight.get(raw)
             owner = pending is None
@@ -173,14 +181,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             logging.info("[pt %s] %s %s <- coalesced (%d bytes)",
                          rid, self.command, raw, len(pending.body))
-            self._send(pending.status, pending.body)
+            self._send(pending.status, pending.body, pending.content_type)
             return
 
         logging.info("[pt %s] %s %s from %s -> solving %s",
                      rid, self.command, raw, self.address_string(), target)
         started = time.monotonic()
         try:
-            status, body, solution = _solve(target)
+            status, body, content_type, solution = _solve(target)
         except Exception as e:
             with _lock:
                 _inflight.pop(raw, None)
@@ -200,14 +208,21 @@ class _Handler(BaseHTTPRequestHandler):
         with _lock:
             _inflight.pop(raw, None)
             if cacheable:
-                _cache[raw] = (time.monotonic() + _CACHE_TTL, status, body)
+                stored_at = time.monotonic()
+                # Reading an entry only skips it once it expires, so drop the dead
+                # ones here: every distinct path a client crawls would otherwise
+                # pin its body (now possibly a whole file) for the process lifetime.
+                for stale in [k for k, v in _cache.items() if v[0] <= stored_at]:
+                    del _cache[stale]
+                _cache[raw] = (stored_at + _CACHE_TTL, status, body, content_type)
         pending.status = status
         pending.body = body
+        pending.content_type = content_type
         pending.event.set()
         logging.info("[pt %s] %s %s <- %d in %.1fs (%d bytes%s)",
                      rid, self.command, raw, status, time.monotonic() - started,
                      len(body), ", cached" if cacheable else "")
-        self._send(status, body)
+        self._send(status, body, content_type)
 
     def do_GET(self):
         self._handle()

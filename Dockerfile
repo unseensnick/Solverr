@@ -61,11 +61,6 @@ RUN apt-get update \
     && chmod -R o+rwX /cache \
     && rm -rf /var/lib/apt/lists/*
 
-# playwright-captcha's CAMOUFOX mode writes a per-run addon script into its own
-# package dir; make it writable by the non-root runtime user.
-RUN CAMO_DIR="$(python -c 'import os, playwright_captcha as p; print(os.path.join(os.path.dirname(p.__file__), "utils", "camoufox_add_init_script"))')" \
-    && chmod -R a+rwX "$CAMO_DIR"
-
 USER flaresolverr
 
 RUN mkdir -p "/app/.config/chromium/Crash Reports/pending"

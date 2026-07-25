@@ -193,6 +193,8 @@ Shuts a session's browser down and frees its resources.
 
 > **Reusing cookies?** Use the User-Agent Solverr returns (`solution.userAgent`) in your own requests. If the UA and `cf_clearance` don't match, Cloudflare re-challenges you.
 
+> **PDFs.** When a URL serves a PDF, the stealth engine returns the file itself, Base64-encoded in `solution.response`, with `solution.contentType` set to `application/pdf`. The Chrome engine returns the viewer page instead, so pin `"engine": "stealth"` when you expect a PDF. Branch on `contentType` rather than assuming: it is absent for ordinary HTML, and also when Solverr could not get the raw bytes and fell back to the viewer page.
+
 Example response (truncated):
 
 ```json
@@ -227,6 +229,8 @@ Like `request.get`, plus `postData`.
 Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges — so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
 
 The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches.
+
+A passthrough request can't pin an engine, so it uses `DEFAULT_ENGINE` like any other request. That matters for PDFs: they come back as the real file only when the stealth engine solved them (see the PDF note under [`request.get`](#requestget)), so set `DEFAULT_ENGINE=stealth` if the site serves them.
 
 **The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS` (anything else gets a `403`, so it is never a blind open proxy). A request to:
 

@@ -8,6 +8,9 @@ class ChallengeResolutionResultT:
     status: int = None
     headers: list = None
     response: str = None
+    # Only emitted when 'response' is not HTML (e.g. "application/pdf" with a
+    # base64 body); absent means text/html, as in FlareSolverr.
+    contentType: str = None
     cookies: list = None
     userAgent: str = None
     screenshot: str | None = None
