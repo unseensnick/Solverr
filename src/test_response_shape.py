@@ -1,8 +1,9 @@
 """Browser-free tests for the shape of a solved response.
 
-Covers the two things that are easy to break silently: the /v1 payload for an
+Covers the things that are easy to break silently: the /v1 payload for an
 ordinary HTML solve must stay byte-identical to FlareSolverr's (no extra keys),
-and a non-HTML document must survive the trip through the passthrough as bytes.
+a non-HTML document must survive the trip through the passthrough as bytes, and
+cookies must look the same whichever engine solved the request.
 
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_response_shape
 """
@@ -15,8 +16,15 @@ import passthrough
 import utils
 from dtos import STATUS_OK, V1ResponseBase
 from engines.base import SolveResult
+from engines.stealth_engine import _to_client_cookies, _to_playwright_cookies
 
 PDF_BYTES = b"%PDF-1.4 fake document"
+
+PLAYWRIGHT_COOKIE = {"name": "cf_clearance", "value": "abc", "domain": ".example.tld",
+                     "path": "/", "expires": 1893456000.5, "httpOnly": True,
+                     "secure": True, "sameSite": "None"}
+SELENIUM_COOKIE = {"name": "cf_clearance", "value": "abc", "domain": ".example.tld",
+                   "path": "/", "expiry": 1893456000, "httpOnly": True, "secure": True}
 
 
 def _serialized(result: SolveResult) -> dict:
@@ -64,6 +72,25 @@ class PassthroughBodyTest(unittest.TestCase):
                           return_value=_solver_response("<html/>")):
             _status, _body, content_type, _solution = passthrough._solve("https://example.tld/page")
         self.assertEqual(content_type, passthrough._HTML_CONTENT_TYPE)
+
+
+class CookieShapeTest(unittest.TestCase):
+
+    def test_returned_cookie_uses_the_selenium_expiry_key(self):
+        self.assertEqual(_to_client_cookies([PLAYWRIGHT_COOKIE])[0]['expiry'], 1893456000)
+
+    def test_returned_cookie_drops_the_playwright_expires_key(self):
+        self.assertNotIn('expires', _to_client_cookies([PLAYWRIGHT_COOKIE])[0])
+
+    def test_session_cookie_is_returned_without_an_expiry(self):
+        session_cookie = dict(PLAYWRIGHT_COOKIE, expires=-1)
+        self.assertNotIn('expiry', _to_client_cookies([session_cookie])[0])
+
+    def test_client_cookie_expiry_is_translated_for_playwright(self):
+        self.assertEqual(_to_playwright_cookies([SELENIUM_COOKIE])[0]['expires'], 1893456000.0)
+
+    def test_client_cookie_drops_keys_playwright_rejects(self):
+        self.assertNotIn('expiry', _to_playwright_cookies([SELENIUM_COOKIE])[0])
 
 
 if __name__ == '__main__':

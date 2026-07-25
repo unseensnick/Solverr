@@ -17,6 +17,7 @@ uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a b
 - The stealth engine is async Playwright running on ONE background event-loop thread (`async_runtime.py`); persistent Camoufox contexts (sessions) live there so their cookies survive across requests. The server itself is synchronous.
 - Sessions: each engine keeps its own pool; a background reaper (`session_reaper.py`) closes idle browsers. Solve once, reuse the cookie many times.
 - Escalation ladder for an `auto` request: Chrome → Camoufox click-solve → (optional, dormant) paid CAPTCHA API.
+- **playwright-captcha only ever touches a throwaway page.** Preparing a solver injects init scripts (one rewrites `Element.prototype.attachShadow`) that are required to click into a Turnstile's closed shadow root, but a Cloudflare interstitial will not clear while they are present, and Playwright cannot remove an init script. So the stealth engine solves interstitials on the context's own clean page and opens a second, disposable page only for a widget that needs clicking. Verified live: interstitial clears in ~3s without them and never in 40s with them; Turnstile fills its token in ~4s with them and never without.
 
 ## Key decisions (WHY)
 

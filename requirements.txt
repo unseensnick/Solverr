@@ -15,4 +15,6 @@ pefile==2024.8.26; platform_system == "Windows"
 # Stealth engine (Camoufox + playwright-captcha), mirrors Byparr's stack
 playwright==1.60.*
 playwright-captcha==0.1.*
-invisible_playwright @ git+https://github.com/feder-cr/invisible_playwright.git
+# Pinned to a commit: an unpinned git dep makes every image rebuild a lottery,
+# and a bad bump here breaks solving while the build stays green.
+invisible_playwright @ git+https://github.com/feder-cr/invisible_playwright.git@a1b75d93e928c37130833d667ae1acf15a23d027

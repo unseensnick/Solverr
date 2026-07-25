@@ -186,7 +186,8 @@ def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
 def _cmd_sessions_list(req: V1RequestBase) -> V1ResponseBase:
     session_ids = SESSIONS_STORAGE.session_ids()
     if STEALTH_ENGINE is not None:
-        session_ids = session_ids + STEALTH_ENGINE.session_ids()
+        # An engine fallback can leave the same id in both pools; report it once.
+        session_ids = list(dict.fromkeys(session_ids + STEALTH_ENGINE.session_ids()))
 
     return V1ResponseBase({
         "status": STATUS_OK,
@@ -198,8 +199,11 @@ def _cmd_sessions_list(req: V1RequestBase) -> V1ResponseBase:
 def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
     session_id = req.session
     existed = SESSIONS_STORAGE.destroy(session_id)
-    if not existed and STEALTH_ENGINE is not None:
-        existed = STEALTH_ENGINE.destroy_session(session_id)
+    if STEALTH_ENGINE is not None:
+        # Always try both pools: an engine fallback can have created a browser
+        # under the same id in the other one, and stopping at the first hit would
+        # leave it running until the reaper notices.
+        existed = STEALTH_ENGINE.destroy_session(session_id) or existed
 
     if not existed:
         raise Exception("The session doesn't exist.")
@@ -268,14 +272,19 @@ def _engine_plan(req: V1RequestBase):
         return [available[forced]], False
 
     host = _host_of(req)
-    primary = _recalled_engine(host)
-    if primary not in available:
-        primary = None
-    if primary is None and req.session:
+    # The engine holding the session wins: a session is a specific browser, and
+    # sending the request elsewhere would silently open a second one under the
+    # same id (and solve without the cookies the client warmed up).
+    primary = None
+    if req.session:
         for name in available:
             if _pool_has(name, req.session):
                 primary = name
                 break
+    if primary is None:
+        primary = _recalled_engine(host)
+        if primary not in available:
+            primary = None
     if primary is None:
         default = config.default_engine()
         primary = default if default in available else 'chrome'
