@@ -17,6 +17,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A busy browser is no longer closed out from under an in-flight request** when the idle reaper or the session cap kicks in.
 - **A challenge that resists solving now hands over to the other engine** rather than failing the whole request with a timeout.
 - **A browser that fails to launch no longer leaks**, and the request explains what happened instead of returning an empty error.
+- **A challenge that clears at just the wrong moment no longer fails the request.** Checking the page while it was navigating to the real content errored out, right at the point the solve had actually worked.
 
 ### Other
 
