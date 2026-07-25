@@ -242,6 +242,8 @@ is solved as `https://example-site.tld/some/path/1/`. Replace `<solverr-host>` w
 
 A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites.
 
+Searches can run against any mirror the client picks, but those root-relative follow-ups always land on the default one, so list the mirror you want them served by first. If that mirror goes down, move a healthy one to the front: a client pointed at a working mirror would otherwise still search fine and fail every download.
+
 Enable it with:
 
 ```yaml
