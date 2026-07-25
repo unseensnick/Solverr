@@ -4,14 +4,16 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.2.0]
+
 ### Additions
 
 - **A URL that serves a PDF now comes back as the actual file.** The stealth engine returns the PDF Base64-encoded with `solution.contentType: application/pdf` instead of the browser viewer's HTML, and the passthrough serves it under its real content type.
 
 ### Fixes
 
+- **Cookies look the same whichever engine solved the request.** The stealth engine used to report an expiry the Chrome engine never did, so a client that stored them saw two different shapes for the same site. If you persist cookies, read `expiry` (absent for session cookies), the field FlareSolverr has always returned.
 - **Interactive Turnstile checkboxes are now clicked reliably on the stealth engine.** Non-interactive interstitials already solved; this is the click-to-verify kind, which previously ran out the clock.
-- **Cookies look the same whichever engine solved the request.** The stealth engine used to report an expiry the Chrome engine never did, so a client that stored them saw two different shapes for the same site.
 - **Destroying a session now closes every browser it opened**, instead of leaving one running until the idle reaper caught it.
 - **A request that names a session stays on that session's browser.** It used to open a second one whenever another engine had last cleared that host, so the warmed-up cookies went unused.
 - **A busy browser is no longer closed out from under an in-flight request** when the idle reaper or the session cap kicks in.
