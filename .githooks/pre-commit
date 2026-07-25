@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Solverr docs enforcement (see .claude/rules/workflow.md: "CHANGELOG" and "Public-facing naming").
+# Lints staged CHANGELOG.md and README.md:
+#   both     - no target-site names or scraping vocabulary in newly added lines, no em dash.
+#   CHANGELOG - every new [Unreleased] entry under Additions / Changes / Fixes leads with a
+#               self-contained bold headline ending in . ! or ? (Other is exempt).
+# Tracked here as the source of truth; activate on a clone with:
+#   git config core.hooksPath .githooks
+set -u
+problems=0
+
+staged() { git diff --cached --name-only | grep -qx "$1"; }
+added()  { git diff --cached -U0 -- "$1" | grep -E '^\+[^+]' | sed 's/^+//'; }
+
+# Heuristic, not a name list, so this file never becomes the thing it prevents. Extend locally via
+# .githooks/deny-names.local (one grep -E pattern per line, gitignored).
+name_patterns='(^|[^A-Za-z0-9./@-])[a-z0-9][a-z0-9-]{1,}\.(to|st|se|nl|cc|ws|eu|si|mx|nu|tv|onion)([^A-Za-z0-9]|$)|scrap(e|er|ers|ing)|torrent|magnet:'
+local_deny="$(dirname "$0")/deny-names.local"
+[ -f "$local_deny" ] && name_patterns="$name_patterns|$(paste -sd'|' "$local_deny")"
+
+for f in CHANGELOG.md README.md; do
+  staged "$f" || continue
+  new=$(added "$f")
+  [ -n "$new" ] || continue
+
+  hits=$(printf '%s\n' "$new" | grep -inE "$name_patterns" || true)
+  if [ -n "$hits" ]; then
+    echo "$f: a new line names a target site or uses scraping vocabulary, genericize it:" >&2
+    printf '%s\n' "$hits" | head -5 >&2
+    problems=1
+  fi
+
+  em=$(printf '%s\n' "$new" | grep -n '—' || true)
+  if [ -n "$em" ]; then
+    echo "$f: contains an em dash; use commas, parentheses, periods, or colons:" >&2
+    printf '%s\n' "$em" | head -5 >&2
+    problems=1
+  fi
+done
+
+# CHANGELOG [Unreleased] entries: benefit-first bold headline, self-contained, sentence-ending.
+if staged CHANGELOG.md; then
+  issues=$(awk '
+    /^## \[/            { in_unreleased = ($0 ~ /\[Unreleased\]/) }
+    /^### /             { section = $2 }
+    in_unreleased && /^- / {
+      exempt = (section == "Other")
+      if (!exempt) {
+        if ($0 !~ /^- \*\*/)                 print NR ": entry does not start with a bold headline: " $0
+        else if ($0 !~ /\*\*[^*]*[.!?]\*\*|\*\*[^*]*[.!?][^*]*\*\*/) print NR ": headline does not end in . ! or ?: " $0
+      }
+    }
+  ' CHANGELOG.md || true)
+  if [ -n "$issues" ]; then
+    echo "CHANGELOG [Unreleased] entry issues (see .claude/rules/workflow.md):" >&2
+    printf '%s\n' "$issues" | head -8 >&2
+    problems=1
+  fi
+fi
+
+if [ "$problems" -ne 0 ]; then
+  echo "" >&2
+  echo "x Commit rejected by .githooks/pre-commit. Fix the lines above, or fix the hook if it is wrong." >&2
+  exit 1
+fi
+exit 0

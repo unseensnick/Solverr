@@ -32,6 +32,39 @@ Create a commit after a change (do not push unless asked).
 - Subject `type(scope): summary`: a real conventional type (`feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`), imperative, lower-case, no trailing period, `<=72` chars. Scope optional (`chrome`, `stealth`, `sessions`, `docker`).
 - Non-trivial commits get a body: lead with 1-2 plain-language sentences (what changed and why it matters), then benefit-first bullets. A trivial commit is just the subject.
 - No em dashes. No AI watermarks (no `Co-Authored-By: Claude`, no generated-by footer, no robot emoji).
+- **Never a bare `#N`** in the subject or body: it silently links to an issue in this repo. Use the explicit `owner/repo#N` form (`FlareSolverr/FlareSolverr#1626`, `ThePhaseless/Byparr#377`).
+
+### Pre-commit checklist
+
+Run these against the message before committing. The first four are also enforced by `.githooks/commit-msg`; the rest are on you.
+
+1. Subject is `type(scope): summary`, imperative, lower-case, no trailing period, `<=72` chars.
+2. No em dash anywhere in the message.
+3. No AI watermark.
+4. No bare `#N`.
+5. No site names or scraping vocabulary (see "Public-facing naming" below).
+6. Non-trivial change has a body that leads with plain language, not implementation.
+
+## Public-facing naming
+
+**Keep the names of the sites Solverr is pointed at out of every public surface**: commit messages, branch names, `README.md`, `CLAUDE.md`, `CHANGELOG.md`, release notes, and the repo description and topics. Solverr is a general-purpose bypass proxy; naming targets makes it read as tooling for one specific site.
+
+Use generic wording instead: "a Cloudflare-gated site", "an indexer", "the default mirror", "example-site.tld" in docs and examples. Site names are fine in local test scratch files, in chat, and in a private indexer definition that lives outside this repo.
+
+Inherited exception: `src/tests_sites.py` and `src/tests.py` carry a site list from upstream FlareSolverr, byte-identical to theirs. Left as-is so the files stay mergeable; do not add to them.
+
+## Git hooks
+
+`.githooks/` holds the tracked copies. Activate them on a clone with:
+
+```
+git config core.hooksPath .githooks
+```
+
+- `commit-msg` enforces the message standard above.
+- `pre-commit` lints staged `CHANGELOG.md` and `README.md` for the naming rule, em dashes, and the benefit-first headline format.
+
+Never bypass with `--no-verify`. If a hook fires on something legitimate, fix the hook in the same change.
 
 ## Approach
 

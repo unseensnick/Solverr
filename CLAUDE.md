@@ -32,7 +32,19 @@ uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a b
 - `src/engines/` — `base.py` (Engine + SolveResult), `chrome_engine.py`, `stealth_engine.py`.
 - `src/async_runtime.py`, `src/session_reaper.py`, `src/sessions.py` — stealth event loop, idle reaper, Chrome session store.
 - `src/detection.py` (shared challenge/title/selector lists), `src/config.py` (env), `src/postform.py`, `src/dtos.py`.
-- `.claude/rules/workflow.md` — CHANGELOG + commit rules, release-cut. `code-quality.md` — coding principles. `security.md` / `error-handling.md` — path-scoped to `src/`.
+- `.claude/rules/workflow.md` — CHANGELOG + commit rules, release-cut, public-facing naming, git hooks. `code-quality.md` — coding principles. `security.md` / `error-handling.md` — path-scoped to `src/`. `plan-output.md` — how a findings report or plan is structured. `prose-style.md` — sentence-level writing for every output.
+- `docs/dev/upstream-sync.md` — what has been taken from FlareSolverr and Byparr, through which commit, and every deliberate divergence with its reasoning. Read it before calling something drift.
+- `.githooks/` — tracked commit-msg and pre-commit hooks. Activate with `git config core.hooksPath .githooks`.
+
+## Skills
+
+- `/scout` — investigate one non-trivial task, then produce its plan, grounded in `file:line` citations. Use before porting from an upstream or touching the engines, sessions, or the controller.
+- `/upstream-audit` — compare against FlareSolverr and Byparr, classify every difference as covered, missing, or deliberate, and check `/v1` compatibility. Updates the sync ledger.
+- `/live-check` — verify a change against live challenges through an isolated container. The unit tests cannot tell you whether a page still clears; this can.
+- `/release` — cut a version end to end: decide the bump, preflight, tag, then verify the workflows and the published image digests.
+- `/pr-review` — review changes via the four specialist agents in parallel.
+- `/tighten` — trim verbose docs and WHAT comments without losing vital info. Always plans first.
+- `/context-budget` — what this `.claude/` config costs per turn.
 
 ## Don'ts
 

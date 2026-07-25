@@ -1,7 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-
   "permissions": {
+    "additionalDirectories": [
+      "E:\\Code\\cloudflare-bypasses\\FlareSolverr",
+      "E:\\Code\\cloudflare-bypasses\\Byparr",
+      "E:\\Code\\cloudflare-bypasses\\byparr-proxy"
+    ],
     "allow": [
       "Bash(uv run *)",
       "Bash(uv pip *)",
@@ -24,7 +28,12 @@
       "Bash(git switch *)",
       "Bash(gh pr *)",
       "Bash(gh issue *)",
-      "Bash(gh run *)"
+      "Bash(gh run *)",
+      "Bash(git rev-parse *)",
+      "Bash(git show *)",
+      "Bash(git ls-files *)",
+      "Bash(docker manifest inspect *)",
+      "Bash(gh release view *)"
     ],
     "deny": [
       "Read(**/.env)",
@@ -41,10 +50,13 @@
       "Edit(**/.env.*)",
       "Edit(**/secrets/**)",
       "Edit(**/*.pem)",
-      "Edit(**/*.key)"
+      "Edit(**/*.key)",
+      "Read(**/*.jks)",
+      "Read(**/*.keystore)",
+      "Read(**/*.p12)",
+      "Read(**/deny-names.local)"
     ]
   },
-
   "hooks": {
     "PreToolUse": [
       {
