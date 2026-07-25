@@ -46,6 +46,16 @@ copyleft, the combined Solverr work is licensed under GPL-3.0.
     Byparr, Copyright (c) ThePhaseless
 
 ================================================================================
+undetected-chromedriver  (GNU GPL v3.0)  --  https://github.com/ultrafunkamsterdam/undetected-chromedriver
+================================================================================
+A copy of undetected-chromedriver 3.5.5 is vendored under
+src/undetected_chromedriver/, inherited from FlareSolverr and used by the Chrome
+engine. It is licensed under GPL-3.0, the same terms this combined work is
+distributed under.
+
+    undetected-chromedriver, Copyright (c) UltrafunkAmsterdam
+
+================================================================================
 byparr-proxy  --  https://github.com/guyg2232/byparr-proxy
 ================================================================================
 Solverr's optional passthrough proxy is an independent reimplementation of the
