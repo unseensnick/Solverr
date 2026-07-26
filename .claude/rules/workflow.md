@@ -12,7 +12,9 @@ After a code change with any user-facing effect, add a bullet under `## [Unrelea
 
 - Categories: `Additions`, `Changes`, `Fixes`, `Other`. Create `## [Unreleased]` at the top if missing.
 - **Benefit-first.** Each entry under Additions/Changes/Fixes leads with a self-contained bold headline (a complete user-facing phrase ending in `.`/`!`/`?`), optionally one short sentence after. Lead with the effect, never the implementation. Example: `**Sites that only Camoufox can clear now fall back automatically.**`
-- **Keep under-the-hood detail out** (class names, mechanisms, refactor rationale): that belongs in the commit body. Pure-internal changes (refactors, dependency/tooling bumps, infra) get a brief plain line under `Other`, no bold headline.
+- **Keep under-the-hood detail out** (class names, mechanisms, refactor rationale): that belongs in the commit body.
+- **The CHANGELOG is for people who run Solverr, not people who work on it.** An entry earns its place only when a deployer or an API client could notice the change: behavior, config, the response shape, the image. A change that ships in the image without a visible effect (a dependency bump, a base-image change, a refactor) gets a brief plain line under `Other`, no bold headline.
+- **Contributor tooling gets no entry at all.** Agent config under `.claude/`, git hooks, CI workflows, tests, and repo docs never reach a user, so they stay in the commit history where they belong.
 - **Don't churn.** If you're iterating on something already in `[Unreleased]`, edit the existing bullet. Don't accumulate "fix X in feature Y" when Y was added in the same block.
 - Update `README.md` in the same change when behavior or config changes. Describe current behavior, not the journey.
 
