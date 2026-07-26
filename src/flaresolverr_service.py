@@ -125,6 +125,7 @@ def _cmd_request_get(req: V1RequestBase) -> V1ResponseBase:
     # do some validations
     if req.url is None:
         raise Exception("Request parameter 'url' is mandatory in 'request.get' command.")
+    _validate_url(req.url)
     if req.postData is not None:
         raise Exception("Cannot use 'postBody' when sending a GET request.")
     if req.returnRawHtml is not None:
@@ -144,6 +145,7 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
     # do some validations
     if req.postData is None:
         raise Exception("Request parameter 'postData' is mandatory in 'request.post' command.")
+    _validate_url(req.url)
     if req.returnRawHtml is not None:
         logging.warning("Request parameter 'returnRawHtml' was removed in FlareSolverr v2.")
     if req.download is not None:
@@ -233,6 +235,19 @@ def _pool_has(name: str, session_id: str) -> bool:
     if name == 'stealth' and STEALTH_ENGINE is not None:
         return STEALTH_ENGINE.exists(session_id)
     return False
+
+
+def _validate_url(url) -> None:
+    """Reject a URL a browser should never be pointed at.
+
+    Solverr has no auth, so without this a `file://` or `data:` URL turns /v1
+    into a local-file reader for anyone who can reach the port: the browser
+    fetches it and the content comes back in `solution.response`.
+    """
+    if not url:
+        raise Exception("Request parameter 'url' is mandatory.")
+    if urlparse(url).scheme not in ('http', 'https'):
+        raise Exception("Request parameter 'url' must be an 'http://' or 'https://' URL.")
 
 
 def _host_of(req: V1RequestBase):

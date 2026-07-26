@@ -80,6 +80,14 @@ EXPOSE 8192
 # Optional passthrough proxy (PASSTHROUGH_ENABLED=true); default PASSTHROUGH_PORT.
 EXPOSE 8888
 
+# Reports whether the API is still serving, so a wedged container shows as
+# unhealthy instead of up. Deliberately cheap: /health does not drive a browser,
+# so this says nothing about whether solving works. 127.0.0.1 rather than
+# localhost, which resolves to ::1 on an IPv6-enabled network while the server
+# listens on IPv4.
+HEALTHCHECK --interval=5m --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8191}/health" || exit 1
+
 # dumb-init avoids zombie chromium processes
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 
