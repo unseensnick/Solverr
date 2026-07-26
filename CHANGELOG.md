@@ -4,6 +4,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.2.1]
+
 ### Fixes
 
 - **Solverr no longer opens `file://` or `data:` URLs, which could be used to read files from inside the container.** Anything able to reach the API could ask the browser for a local file and get the contents back in `solution.response`. Only `http://` and `https://` are accepted now.
