@@ -42,6 +42,7 @@ uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a b
 - `/upstream-audit` — compare against FlareSolverr and Byparr, classify every difference as covered, missing, or deliberate, and check `/v1` compatibility. Updates the sync ledger.
 - `/live-check` — verify a change against live challenges through an isolated container. The unit tests cannot tell you whether a page still clears; this can.
 - `/release` — cut a version end to end: decide the bump, preflight, tag, then verify the workflows and the published image digests.
+- `/session-handoff` — rewrite `Handoff.md` from verified state, then bring the CHANGELOG, dependent docs, and memory store in line with it.
 - `/pr-review` — review changes via the four specialist agents in parallel.
 - `/tighten` — trim verbose docs and WHAT comments without losing vital info. Always plans first.
 - `/context-budget` — what this `.claude/` config costs per turn.
