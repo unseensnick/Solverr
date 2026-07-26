@@ -62,6 +62,8 @@ The response contains the solved page HTML and cookies. See [Configuration](#con
 
 The browsers are bundled in the image, so Docker is the easiest path. [Quick start](#quick-start) runs the published image; the repo's `docker-compose.yml` is the same setup with the full annotated environment block.
 
+The image reports its own health, so `docker ps` shows `healthy` once the API is answering (`starting` for the first 90 seconds). The check only proves the API is up, not that a solve would succeed, and Docker reports health without acting on it: `restart: unless-stopped` will not restart a container that is wedged but alive.
+
 **Build the image locally** instead of pulling it:
 
 ```bash
@@ -212,7 +214,7 @@ Example response (truncated):
   },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "1.2.0"
+  "version": "1.2.1"
 }
 ```
 

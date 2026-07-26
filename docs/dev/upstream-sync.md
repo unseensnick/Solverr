@@ -39,13 +39,14 @@ These need no review until upstream changes them. Verified identical on 2026-07-
 - `html_samples/*.html`
 - `src/utils.py`, `src/bottle_plugins/`
 
+## Taken
+
+- **URL scheme validation** (v1.2.1). Byparr enforces `http(s)://` at its model layer; Solverr validates in the controller before any engine sees the URL (`_validate_url`, `src/flaresolverr_service.py`). Worth knowing why it mattered: on the published 1.2.0 image a `file:///etc/passwd` request returned the file in `solution.response`, verified directly.
+- **A Docker healthcheck** (v1.2.1). Byparr's shape, adapted: it honors `${PORT:-8191}` and uses the IPv4 literal, since `localhost` resolves to `::1` on an IPv6-enabled network while the server listens on IPv4 (the same trap Byparr hit in `885a24c`). FlareSolverr still has none.
+
 ## Known gaps, not yet taken
 
-Open items from the 2026-07-25 audit, none of them urgent:
-
-- **Real `solution.headers` on the stealth engine.** Byparr returns the response headers; Solverr sets `{}` to match the Chrome engine's `todo`. Now that the engine tracks the main-frame response for PDF detection, this is close to free.
-- **URL scheme validation.** Byparr rejects anything that is not `http(s)://` at the model layer. Solverr only checks for a missing URL, so a `file://` or `data:` URL reaches the browser. Inherited from FlareSolverr, which has the same gap.
-- **A Docker healthcheck.** Byparr has one; neither Solverr nor FlareSolverr does.
+- **Real `solution.headers` on the stealth engine.** Byparr returns the response headers; Solverr sets `{}` to match the Chrome engine's `todo`. Now that the engine tracks the main-frame response for PDF detection, this is close to free. The catch: filling it in for stealth only would reintroduce the engine asymmetry that the v1.2.0 cookie fix removed, so it needs either a Chrome-side answer or a documented asymmetry.
 
 ## When you take something
 

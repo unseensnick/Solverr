@@ -10,3 +10,4 @@ paths:
 - User-controlled values that reach a browser (POST body, cookies, URL) must stay escaped. The POST form builder (`postform.py`) already `escape(quote(...))`s field names/values; keep that when editing.
 - Never concatenate request input into a shell command. Browser navigation uses the driver/page API, not the shell.
 - Treat the `/v1` request as an untrusted boundary: keep the existing validations in the controller before handing a URL to an engine.
+- **Only `http(s)` URLs may reach a browser** (`_validate_url` in `flaresolverr_service.py`, called by both request commands). Do not loosen it: before v1.2.1 a `file://` URL was fetched and its contents returned in `solution.response`, which made any reachable port a local-file reader.
