@@ -4,6 +4,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Other
+
+- The stealth browser now installs from a published release on PyPI (`invisible-playwright` 0.6.1) instead of a git checkout, so a rebuild resolves to a fixed version. The image no longer ships `git`.
+
 ## [1.2.1]
 
 ### Fixes
