@@ -4,6 +4,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.2.2]
+
 ### Fixes
 
 - **Interactive Turnstile checkboxes are clicked again on the stealth engine, and one that stays unsolved is no longer reported as solved.** The click had stopped working, and the engine answered "Challenge solved!" with an empty `turnstile_token` instead of failing, so a request never fell back to the other engine. A page gated by a widget now either comes back with its token or fails over to Chrome.
