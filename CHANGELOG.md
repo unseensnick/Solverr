@@ -4,6 +4,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Fixes
+
+- **Interactive Turnstile checkboxes are clicked again on the stealth engine, and one that stays unsolved is no longer reported as solved.** The click had stopped working, and the engine answered "Challenge solved!" with an empty `turnstile_token` instead of failing, so a request never fell back to the other engine. A page gated by a widget now either comes back with its token or fails over to Chrome.
+
 ### Other
 
 - The stealth browser now installs from a published release on PyPI (`invisible-playwright` 0.6.1) instead of a git checkout, so a rebuild resolves to a fixed version. The image no longer ships `git`.

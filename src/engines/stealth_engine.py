@@ -36,6 +36,13 @@ _NETWORKIDLE_MS = 5000
 # by the JSON response, so cap what we are willing to pull into memory.
 _MAX_PDF_BYTES = 32 * 1024 * 1024
 
+# The Turnstile widget renders in an iframe served from this host, and its
+# checkbox sits at the left edge, vertically centered, in the standard 300x65
+# layout. Measured against the live widget: a click there flips it to "Success!".
+_TURNSTILE_FRAME_HOST = "challenges.cloudflare.com"
+_TURNSTILE_CHECKBOX_X = 30
+_TURNSTILE_RECLICK_SECONDS = 6
+
 # playwright-captcha logs each failed click attempt at ERROR, which is expected
 # and harmless for non-interactive interstitials (no checkbox to click). We handle
 # the solve outcome ourselves, so quiet its internal noise to keep logs readable.
@@ -407,10 +414,11 @@ class StealthEngine(Engine):
                 # verdict (which the controller can retry on the other engine) into
                 # a timeout error.
                 deadline = started + max(1.0, timeout - 3)
-                # An interstitial clears itself and is the case that must stay
-                # unpatched; only a widget that needs clicking gets a solver.
-                solver = await open_click_page() if is_turnstile else None
-                solved = await self._wait_until_cleared(solver, page, captcha_type, deadline)
+                # Both kinds are handled on the context's own page: an interstitial
+                # clears itself, and a widget is clicked by coordinate, so neither
+                # needs the solver's init scripts. Only the paid escalation below
+                # does, and it moves to the throwaway page for them.
+                solved = await self._wait_until_cleared(None, page, captcha_type, deadline)
 
                 # Escalate to the paid CAPTCHA API only if configured and still stuck.
                 if not solved and config.api_solver_enabled():
@@ -534,13 +542,14 @@ class StealthEngine(Engine):
         """Wait for the Cloudflare challenge to clear, up to ``deadline``.
 
         Non-interactive interstitials solve themselves after a few seconds of JS,
-        so with no ``solver`` this just polls for the challenge to disappear.
-        Interactive Turnstile/checkbox challenges need a click, so when a solver is
-        given each pass also nudges it (a harmless "iframes not found" when there
-        is no checkbox to click).
+        so for those this just polls for the challenge to disappear. An interactive
+        Turnstile needs a click, so its checkbox is clicked and re-clicked while it
+        stays unsolved. A ``solver`` is passed only by the paid escalation, which
+        nudges playwright-captcha instead.
         """
         loop = asyncio.get_running_loop()
         is_turnstile = captcha_type == CaptchaType.CLOUDFLARE_TURNSTILE
+        last_click = 0.0
         while True:
             kind = (await self._detect_settled(page))[0]
             if kind == "denied":
@@ -562,6 +571,11 @@ class StealthEngine(Engine):
                     )
                 except Exception as e:
                     logging.debug("click-solve nudge: %s", e)
+            elif is_turnstile and loop.time() - last_click >= _TURNSTILE_RECLICK_SECONDS:
+                # Verifying takes a few seconds after the click, and clicking again
+                # every pass would both restart it and read as machine input.
+                if await self._click_turnstile(page):
+                    last_click = loop.time()
 
             # A standalone Turnstile widget stays in the DOM after solving, so
             # _detect keeps seeing it. The filled token is the proof it cleared:
@@ -574,6 +588,32 @@ class StealthEngine(Engine):
             if loop.time() >= deadline:
                 return False
             await asyncio.sleep(1.5)
+
+    async def _click_turnstile(self, page) -> bool:
+        """Click the Turnstile checkbox, without touching main-world JS.
+
+        The widget's iframe lives in a closed shadow root, so query_selector on the
+        page cannot reach it, and playwright-captcha's traversal into that root goes
+        through evaluate_handle, which the iframe's own CSP blocks under Firefox
+        ("call to eval() blocked by CSP"). The frame tree lists the iframe anyway,
+        and a coordinate click is dispatched by the browser rather than by page JS,
+        so neither the shadow root nor the CSP is in the way.
+        """
+        for frame in page.frames:
+            if _TURNSTILE_FRAME_HOST not in (frame.url or ""):
+                continue
+            try:
+                box = await (await frame.frame_element()).bounding_box()
+            except Exception:
+                logging.debug("turnstile frame read raced a navigation", exc_info=True)
+                continue
+            # A widget that has not laid out yet reports no box; a later pass gets it.
+            if not box:
+                continue
+            await page.mouse.click(box["x"] + _TURNSTILE_CHECKBOX_X,
+                                   box["y"] + box["height"] / 2)
+            return True
+        return False
 
     async def _turnstile_token(self, page) -> Optional[str]:
         """Value of a standalone Turnstile input (the solved token), or None.
