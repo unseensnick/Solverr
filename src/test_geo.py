@@ -1,8 +1,9 @@
-"""Browser-free tests for the shared timezone resolver.
+"""Browser-free tests for the shared timezone and language resolver.
 
-The point of this module is that a solve never fails because a timezone could
-not be worked out, and that both engines are handed the same answer, so these
-cover the precedence chain, the cache, and every way resolution can go wrong.
+The point of this module is that a solve never fails because the browser's
+timezone or language could not be worked out, and that both engines are handed
+the same pair from the same lookup, so these cover the precedence chains, the
+cache, and every way resolution can go wrong.
 
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_geo
 """
@@ -63,7 +64,7 @@ class PinnedTimezoneTest(unittest.TestCase):
 
     def test_auto_falls_through_to_resolution(self):
         with _env(BROWSER_TIMEZONE='auto'), \
-             patch.object(geo, '_from_egress', return_value='Europe/Berlin'):
+             patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')):
             self.assertEqual(_tz(PROXY), 'Europe/Berlin')
 
 
@@ -73,55 +74,128 @@ class ResolvedTimezoneTest(unittest.TestCase):
         geo.reset_cache()
 
     def test_unset_resolves_from_the_egress_ip(self):
-        with _env(), patch.object(geo, '_from_egress', return_value='Europe/Berlin'):
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')):
             self.assertEqual(_tz(PROXY), 'Europe/Berlin')
 
     def test_failed_resolution_falls_back_to_the_container_timezone(self):
-        with _env(TZ='Europe/Oslo'), patch.object(geo, '_from_egress', return_value=None):
+        with _env(TZ='Europe/Oslo'), patch.object(geo, '_from_egress', return_value=(None, None)):
             self.assertEqual(_tz(PROXY), 'Europe/Oslo')
 
     def test_failed_resolution_without_tz_falls_back_to_utc(self):
-        with _env(), patch.object(geo, '_from_egress', return_value=None):
+        with _env(), patch.object(geo, '_from_egress', return_value=(None, None)):
             self.assertEqual(_tz(PROXY), 'UTC')
 
     def test_a_resolved_zone_is_reused(self):
-        with _env(), patch.object(geo, '_from_egress', return_value='Europe/Berlin') as resolve:
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')) as resolve:
             _tz(PROXY)
             _tz(PROXY)
         self.assertEqual(resolve.call_count, 1)
 
     def test_each_proxy_is_resolved_separately(self):
-        with _env(), patch.object(geo, '_from_egress', return_value='Europe/Berlin') as resolve:
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')) as resolve:
             _tz(PROXY)
             _tz(OTHER_PROXY)
         self.assertEqual(resolve.call_count, 2)
 
 
+class _Geo:
+    """Stands in for invisible_core's SessionGeo."""
+
+    def __init__(self, timezone, egress_ip):
+        self.timezone = timezone
+        self.egress_ip = egress_ip
+
+
+def _resolver(zone='Europe/Berlin', ip='198.51.100.9', language='de-DE'):
+    """A (prepare_session_geo, resolve_session_locale) pair, as the library's."""
+    return (lambda _tz, _proxy: _Geo(zone, ip), lambda _ip, _proxy: language)
+
+
 class ResolutionFailureTest(unittest.TestCase):
     """_from_egress must swallow everything: no browser is worse than a wrong zone."""
 
-    def test_a_raising_resolver_reports_no_zone(self):
+    def test_a_raising_zone_resolver_reports_no_zone(self):
         def boom(*_args):
             raise RuntimeError("could not discover the proxy egress IP")
-        with patch.object(geo, '_load_resolver', return_value=boom), \
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')), \
              self.assertLogs(level='WARNING'):
-            self.assertIsNone(geo._from_egress({"server": "http://proxy.tld:8080"}))
+            self.assertIsNone(geo._from_egress({"server": "http://proxy.tld:8080"})[0])
+
+    def test_a_raising_zone_resolver_still_reports_a_language(self):
+        def boom(*_args):
+            raise RuntimeError("nope")
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')), \
+             self.assertLogs(level='WARNING'):
+            self.assertEqual(geo._from_egress(None)[1], 'de-DE')
+
+    def test_a_raising_language_resolver_reports_no_language(self):
+        def boom(*_args):
+            raise RuntimeError("nope")
+        with patch.object(geo, '_load_resolver', return_value=(_resolver()[0], boom)):
+            self.assertIsNone(geo._from_egress(None)[1])
 
     def test_an_empty_zone_reports_no_zone(self):
-        with patch.object(geo, '_load_resolver', return_value=lambda *_a: ''):
-            self.assertIsNone(geo._from_egress(None))
+        with patch.object(geo, '_load_resolver', return_value=_resolver(zone='')):
+            self.assertIsNone(geo._from_egress(None)[0])
 
-    def test_a_missing_resolver_reports_no_zone(self):
+    def test_a_missing_resolver_reports_neither(self):
         with patch.object(geo, '_load_resolver', return_value=None):
-            self.assertIsNone(geo._from_egress(None))
+            self.assertEqual(geo._from_egress(None), (None, None))
+
+    def test_the_language_reuses_the_zone_lookup_ip(self):
+        seen = []
+        with patch.object(geo, '_load_resolver',
+                          return_value=(lambda _tz, _p: _Geo('Europe/Berlin', '198.51.100.9'),
+                                        lambda ip, _p: seen.append(ip) or 'de-DE')):
+            geo._from_egress(None)
+        self.assertEqual(seen, ['198.51.100.9'])
 
     def test_the_proxy_password_is_never_logged(self):
         def boom(*_args):
             raise RuntimeError("nope")
-        with patch.object(geo, '_load_resolver', return_value=boom), \
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')), \
              self.assertLogs(level='WARNING') as logs:
             geo._from_egress(geo.proxy_to_config(PROXY))
         self.assertNotIn('s3cr3t-pass', logs.output[0])
+
+
+class BrowserLanguageTest(unittest.TestCase):
+
+    def setUp(self):
+        geo.reset_cache()
+
+    def test_it_comes_from_the_exit_ip_when_nothing_is_set(self):
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')):
+            self.assertEqual(geo.browser_language(geo.proxy_to_config(PROXY)), 'nb-NO')
+
+    def test_lang_wins_over_the_exit_ip(self):
+        with _env(LANG='de_DE.UTF-8'), \
+             patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')):
+            self.assertEqual(geo.browser_language(geo.proxy_to_config(PROXY)), 'de-DE')
+
+    def test_a_failed_resolution_falls_back_to_english(self):
+        with _env(), patch.object(geo, '_from_egress', return_value=(None, None)):
+            self.assertEqual(geo.browser_language(geo.proxy_to_config(PROXY)), 'en-US')
+
+    def test_it_shares_one_lookup_with_the_timezone(self):
+        with _env(), patch.object(geo, '_from_egress',
+                                  return_value=('Europe/Oslo', 'nb-NO')) as resolve:
+            geo.browser_identity(geo.proxy_to_config(PROXY))
+        self.assertEqual(resolve.call_count, 1)
+
+    def test_both_halves_come_from_the_same_country(self):
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')):
+            self.assertEqual(geo.browser_identity(geo.proxy_to_config(PROXY)),
+                             ('Europe/Oslo', 'nb-NO'))
+
+
+class AcceptLanguageTest(unittest.TestCase):
+
+    def test_a_regional_tag_gains_its_base(self):
+        self.assertEqual(geo.accept_language('de-DE'), 'de-DE, de')
+
+    def test_a_bare_language_stays_alone(self):
+        self.assertEqual(geo.accept_language('fr'), 'fr')
 
 
 ZONE_TAB = (
@@ -220,19 +294,19 @@ class BrowserGeoTest(unittest.TestCase):
 
     def test_an_explicit_auto_asks_for_the_exit_ip_instead(self):
         with _env(BROWSER_GEO='de-DE', BROWSER_TIMEZONE='auto'), _with_zone_tab(), \
-             patch.object(geo, '_from_egress', return_value='Europe/Oslo'):
+             patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')):
             self.assertEqual(_tz(PROXY), 'Europe/Oslo')
 
     def test_a_countryless_tag_falls_back_to_the_exit_ip(self):
         with _env(BROWSER_GEO='fr'), _with_zone_tab(), \
-             patch.object(geo, '_from_egress', return_value='Europe/Oslo'), \
+             patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')), \
              self.assertLogs(level='WARNING'):
             self.assertEqual(_tz(PROXY), 'Europe/Oslo')
 
     def test_a_missing_table_falls_back_to_the_exit_ip(self):
         with _env(BROWSER_GEO='de-DE'), \
              patch.object(geo, '_ZONE_TAB_PATHS', ('/nonexistent/zone1970.tab',)), \
-             patch.object(geo, '_from_egress', return_value='Europe/Oslo'), \
+             patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')), \
              self.assertLogs(level='WARNING'):
             self.assertEqual(_tz(PROXY), 'Europe/Oslo')
 
@@ -268,7 +342,7 @@ class ChromeTimezoneTest(unittest.TestCase):
 
     def test_both_engines_are_given_the_same_zone(self):
         driver = _Driver()
-        with _env(), patch.object(geo, '_from_egress', return_value='Europe/Berlin'):
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')):
             chrome_engine._apply_timezone(driver, PROXY)
             stealth_zone = _tz(PROXY)
         self.assertEqual(driver.calls[0][1]["timezoneId"], stealth_zone)

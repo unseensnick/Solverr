@@ -15,7 +15,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 ### Fixes
 
 - **A solve no longer fails because the browser's timezone could not be worked out.** Behind a proxy, an unreachable address-lookup service used to abort the whole request; it now falls back to the container's `TZ` with a warning in the log.
-- **Both engines report the same timezone.** Camoufox followed the exit IP while Chrome reported the container's timezone, so the same request could place the browser in two different places depending on which engine answered it.
+- **Both engines report the same timezone and the same language.** Camoufox followed the exit IP while Chrome reported the container's timezone and its own build's language, so the same request could place the browser in two different countries depending on which engine answered it, and a fallback could change it mid-session. Both now come from one lookup. Chrome also reports the two-entry `navigator.languages` a desktop browser sends, instead of a single entry.
 - **A URL that returns JSON now comes back as JSON, whichever engine solved it.** The stealth engine used to return the browser's built-in JSON viewer page instead of the payload, so the same request gave usable JSON through Chrome and markup through Camoufox.
 - **A solved response always reports the User-Agent that fetched it.** When the browser's user agent could not be read at startup, every response from that browser came back with an empty `userAgent`, which breaks reusing its cookies.
 

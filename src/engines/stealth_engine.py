@@ -132,15 +132,15 @@ class StealthContext:
         # returns before its own auto-resolution, which behind a proxy raises on
         # a failed egress lookup and takes the whole launch down with it. Off the
         # loop because a cold lookup blocks for seconds.
-        timezone = await asyncio.to_thread(geo.browser_timezone, self.proxy_config)
+        timezone, language = await asyncio.to_thread(geo.browser_identity, self.proxy_config)
         self._ip = InvisiblePlaywright(
             headless=config.stealth_headless(),
             proxy=self.proxy_config,
             humanize=True,
             timezone=timezone,
-            # "auto" derives the language from the egress country, which keeps it
-            # consistent with the exit IP. LANG overrides that for both engines.
-            locale=config.browser_locale() or "auto",
+            # Concrete rather than "auto" so this browser and Chrome get the
+            # same country, and so the library resolves nothing of its own.
+            locale=language,
             # Firefox renders application/json in a built-in viewer, so
             # page.content() would hand back the viewer's markup instead of the
             # payload. With it off, JSON renders as text in a <pre>, which is

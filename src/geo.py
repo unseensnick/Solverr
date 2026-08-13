@@ -1,16 +1,20 @@
-"""Browser timezone resolution, shared by both engines.
+"""Where the browser claims to be: timezone and language, for both engines.
 
-The stealth stack resolves a timezone from the egress IP itself, on every
-browser launch, inside the library where the answer cannot be reused. That
-costs an IP-echo round trip under a 15 second budget per launch, and behind a
-proxy a discovery failure raises instead of degrading, which kills the launch
-outright (`prepare_session_geo` in `invisible_core/_geo.py`).
+The stealth stack works both out from the egress IP itself, on every browser
+launch, inside the library where the answers cannot be reused. That costs an
+IP-echo round trip under a 15 second budget per launch, and behind a proxy a
+discovery failure raises instead of degrading, which kills the launch outright
+(`prepare_session_geo` in `invisible_core/_geo.py`). Chrome meanwhile derived
+neither, reporting the container's timezone and its own build's language, so
+the same request answered by the other engine changed both.
 
-Solverr resolves it here instead: once per proxy, cached, never fatal, and the
-same answer goes to both engines so they cannot disagree about where the
-browser is. Handing the library a concrete zone also returns it before its own
-fatal branch, so a solve can no longer fail because an IP-echo endpoint was
-unreachable.
+Solverr resolves them here instead: one round trip per proxy, cached, never
+fatal, and the same pair goes to both engines. They travel together because
+the pairing is what a site checks, and the library says so itself: a language
+falling back to en-US while the timezone still resolves is the cross-field
+inconsistency the timezone check exists to catch. Handing the library concrete
+values also returns it before its own fatal branch, so a solve can no longer
+fail because an IP-echo endpoint was unreachable.
 """
 import logging
 import os
@@ -26,12 +30,16 @@ import config
 # disabled) from meaning "resolve on every launch".
 _MIN_CACHE_SECONDS = 300
 
+# What the language falls back to when nothing can be resolved. Matches what
+# invisible_core itself falls back to, so the two never disagree.
+_DEFAULT_LANGUAGE = "en-US"
+
 # zone1970.tab is the maintained one; zone.tab is its single-country-per-row
 # predecessor, kept as a fallback for systems that still ship only that.
 _ZONE_TAB_PATHS = ("/usr/share/zoneinfo/zone1970.tab", "/usr/share/zoneinfo/zone.tab")
 
 _lock = threading.Lock()
-_cache = {}  # proxy server -> (expires_monotonic, zone)
+_cache = {}  # proxy server -> (expires_monotonic, zone, language)
 _geo_zones = {}  # BROWSER_GEO tag -> zone or None
 _zone_table_cache = None
 _known_zones_cache = None
@@ -72,20 +80,62 @@ def browser_timezone(proxy_config: Optional[dict] = None) -> str:
         from_geo = _zone_from_geo()
         if from_geo:
             return from_geo
+    return _resolved(proxy_config)[0]
 
+
+def browser_language(proxy_config: Optional[dict] = None) -> str:
+    """The language tag both engines should browse in. Never raises.
+
+    Left to themselves the engines disagree: Chrome sends its own build default
+    while Camoufox derives a language from the exit country, so the same request
+    answered by the other engine changed language, and a fallback mid-session
+    changed it under the site's feet. Neither value was wrong; disagreeing was.
+
+    LANG and BROWSER_GEO win, in that order. Otherwise it comes from the same
+    exit IP the timezone does, so the two cannot contradict each other.
+    """
+    return config.browser_locale() or _resolved(proxy_config)[1]
+
+
+def browser_identity(proxy_config: Optional[dict] = None) -> tuple:
+    """(timezone, language) together, for a caller that wants one thread hop."""
+    return browser_timezone(proxy_config), browser_language(proxy_config)
+
+
+def accept_language(tag: str) -> str:
+    """A language tag as the "tag, base" pair a desktop browser sends.
+
+    Camoufox builds this itself from `locale=`, so navigator.languages there is
+    ["de-DE", "de"]. Chrome takes whatever --accept-lang says verbatim and was
+    reporting a single-element list, which no ordinary desktop browser does.
+    """
+    base = tag.split('-')[0]
+    return f"{tag}, {base}" if base != tag else tag
+
+
+def _resolved(proxy_config: Optional[dict]) -> tuple:
+    """(timezone, language) for the exit IP, resolved once per proxy and cached.
+
+    Both come out of one round trip so they cannot disagree about the country,
+    which is the pairing that matters: the library's own comment notes that a
+    language falling back to en-US while the timezone resolves is exactly the
+    cross-field inconsistency the timezone check exists to catch.
+    """
     key = (proxy_config or {}).get("server") or ""
 
     now = time.monotonic()
     with _lock:
         cached = _cache.get(key)
         if cached is not None and cached[0] > now:
-            return cached[1]
+            return cached[1], cached[2]
 
-    zone = _from_egress(proxy_config) or container_timezone()
+    zone, language = _from_egress(proxy_config)
+    zone = zone or container_timezone()
+    language = language or _DEFAULT_LANGUAGE
 
     with _lock:
-        _cache[key] = (time.monotonic() + _cache_seconds(), zone)
-    return zone
+        _cache[key] = (time.monotonic() + _cache_seconds(), zone, language)
+    return zone, language
 
 
 def _zone_from_geo() -> Optional[str]:
@@ -253,38 +303,50 @@ def _cache_seconds() -> int:
 
 
 def _load_resolver():
-    """The stealth stack's egress-to-zone resolver, or None if unavailable.
+    """(prepare_session_geo, resolve_session_locale), or None if unavailable.
 
     The only boundary this module has to the outside world, kept in one place so
     a Chrome-only runtime missing the stealth stack degrades instead of failing.
     """
     try:
-        from invisible_core import resolve_session_timezone
-        return resolve_session_timezone
+        from invisible_core import prepare_session_geo, resolve_session_locale
+        return prepare_session_geo, resolve_session_locale
     except Exception:
-        logging.debug("geo resolution unavailable, using the container timezone", exc_info=True)
+        logging.debug("geo resolution unavailable, using the container defaults", exc_info=True)
         return None
 
 
-def _from_egress(proxy_config: Optional[dict]) -> Optional[str]:
-    """The zone for the egress IP, or None if it cannot be determined.
+def _from_egress(proxy_config: Optional[dict]) -> tuple:
+    """(zone, language) for the egress IP; either is None if it wasn't found.
 
     Swallows everything on purpose: this is the difference between a browser
     that launches with a slightly wrong timezone and no browser at all. The
-    library raises here behind a proxy, and a proxy endpoint without a port
-    raises before any request is made.
+    library raises for the zone behind a proxy, and a proxy endpoint without a
+    port raises before any request is made.
     """
     resolver = _load_resolver()
     if resolver is None:
-        return None
+        return None, None
+    prepare, resolve_locale = resolver
+
+    zone, egress_ip = None, None
     try:
-        return resolver("auto", proxy_config) or None
+        # One round trip: this returns the exit IP alongside the zone, and the
+        # language resolver reuses it rather than discovering its own.
+        session = prepare("", proxy_config)
+        zone, egress_ip = (session.timezone or None), session.egress_ip
     except Exception as e:
         # Server only, never the dict: it carries the proxy password.
         logging.warning("could not resolve a timezone for %s (%s); using %s",
                         (proxy_config or {}).get("server") or "the direct connection",
                         e, container_timezone())
-        return None
+
+    try:
+        language = resolve_locale(egress_ip, proxy_config) or None
+    except Exception:
+        logging.debug("could not resolve a browser language", exc_info=True)
+        language = None
+    return zone, language
 
 
 def reset_cache() -> None:

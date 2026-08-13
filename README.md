@@ -358,13 +358,13 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 
 ### Browser language and timezone
 
-A site can compare the language and clock a browser reports against the country its IP is in, so both engines are always given the same answer for both. Out of the box you need to set nothing: the timezone is worked out from the exit IP once and reused, and the language follows the same country.
+A site can compare the language and clock a browser reports against the country its IP is in, so both engines are always given the same answer for both, from the same lookup. Out of the box you need to set nothing: the timezone and the language are worked out together from the exit IP once and reused, so they always name the same country and a request answered by either engine looks the same.
 
 Set something only when you need a specific result. There are three knobs and they layer:
 
 | Set this | Effect | Costs a lookup? |
 | -------- | ------ | --------------- |
-| nothing | Timezone from the exit IP, language to match | once per proxy |
+| nothing | Timezone and language both from the exit IP | once per proxy |
 | `BROWSER_GEO=de-DE` | German, `Europe/Berlin` | no |
 | `LANG=de-DE` | German, timezone still from the exit IP | once per proxy |
 | `BROWSER_TIMEZONE=Europe/Berlin` | `Europe/Berlin`, language unchanged | no |
@@ -383,15 +383,17 @@ Set something only when you need a specific result. There are three knobs and th
 | `pt-BR`       | `pt-BR` |
 | `zh_Hans_CN`  | `zh-Hans-CN` |
 | `fr`          | `fr` |
-| `C`, `POSIX`  | ignored, falls through to `BROWSER_GEO` |
+| `C`, `POSIX`  | ignored, falls through to `BROWSER_GEO` then the exit IP |
 
 Anything that isn't a language tag is ignored with a warning in the log rather than passed on. That is deliberate: a malformed value would reach `navigator.languages` and the `Accept-Language` header verbatim, which is a more distinctive fingerprint than setting nothing at all. `C.UTF-8` is ignored for the same reason, and because it is a container default nobody chose.
+
+Whatever the language ends up being, both engines report it as the two-entry `navigator.languages` a desktop browser sends: `de-DE` becomes `["de-DE", "de"]`.
 
 **`BROWSER_TIMEZONE`** takes any IANA zone. Pinning it costs no lookup, so it is also how an air-gapped deployment skips the exit-IP check entirely.
 
 Two things worth knowing. Forcing a language a country doesn't speak, or a timezone it isn't in, is a mismatch a site can see, so change one only if you know why. And some countries share a timezone definition with a neighbour: Norway reports `Europe/Berlin` and the Netherlands `Europe/Brussels`, which is correct rather than a bug, since those are the same zone with the same offset and the same daylight-saving rules.
 
-If the exit IP can't be reached to resolve a zone, Solverr falls back to the container's `TZ` and logs a warning; it does not fail the request. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
+If the exit IP can't be reached, Solverr falls back to the container's `TZ` for the timezone and `en-US` for the language, logs a warning, and carries on; it does not fail the request. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
 
 ## Proxy & reliability
 
