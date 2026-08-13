@@ -345,20 +345,36 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | -------------------- | --------- | ----------------------------------------------------------------------------- |
 | `HEADLESS`           | `true`    | Run the Chrome engine headless (visible only for debugging).                   |
 | `DISABLE_MEDIA`      | `false`   | Block images/CSS/fonts by default to save bandwidth (both engines).            |
+| `BROWSER_GEO`        | none      | One tag setting the browser's language **and** timezone. Eg `de-DE`. See below. |
 | `LANG`               | none      | Browser language for both engines. Accepts `en_US.UTF-8` or `en-US`. See below. |
+| `BROWSER_TIMEZONE`   | `auto`    | Browser timezone for both engines: an IANA zone, or `auto` to follow the exit IP. See below. |
 | `LOG_LEVEL`          | `info`    | `info` or `debug`.                                                             |
 | `LOG_FILE`           | none      | Also write logs to this file. Eg `/config/solverr.log`.                        |
 | `LOG_HTML`           | `false`   | Debug only: log all page HTML at `debug` level.                                |
 | `HOST` / `PORT`      | `0.0.0.0` / `8191` | Listening interface and port. Rarely changed under Docker.           |
-| `TZ`                 | `UTC`     | Container timezone (affects log timestamps). Eg `TZ=Europe/London`.            |
+| `TZ`                 | `UTC`     | Container timezone: log timestamps, and the browser's timezone when nothing resolves one. Eg `TZ=Europe/London`. |
 | `PROMETHEUS_ENABLED` | `false`   | Enable the Prometheus exporter (see below).                                    |
 | `PROMETHEUS_PORT`    | `8192`    | Exporter port (expose it if enabled).                                          |
 
-### Browser language
+### Browser language and timezone
 
-`LANG` sets the language both engines browse in, and it is unset by default. Leave it that way unless you need a specific language: Camoufox otherwise picks one from the country your traffic exits through, so a French proxy browses in French and the exit IP and the language agree.
+A site can compare the language and clock a browser reports against the country its IP is in, so both engines are always given the same answer for both. Out of the box you need to set nothing: the timezone is worked out from the exit IP once and reused, and the language follows the same country.
 
-Both POSIX and tag forms work, and the value is normalized before it reaches a browser:
+Set something only when you need a specific result. There are three knobs and they layer:
+
+| Set this | Effect | Costs a lookup? |
+| -------- | ------ | --------------- |
+| nothing | Timezone from the exit IP, language to match | once per proxy |
+| `BROWSER_GEO=de-DE` | German, `Europe/Berlin` | no |
+| `LANG=de-DE` | German, timezone still from the exit IP | once per proxy |
+| `BROWSER_TIMEZONE=Europe/Berlin` | `Europe/Berlin`, language unchanged | no |
+| `BROWSER_TIMEZONE=auto` | Exit IP, ignoring any `BROWSER_GEO` | once per proxy |
+
+`LANG` and `BROWSER_TIMEZONE` each override `BROWSER_GEO` for their own half, so `BROWSER_GEO=en-US` with `BROWSER_TIMEZONE=America/Chicago` gives American English on Chicago time.
+
+**`BROWSER_GEO`** is the short way to match a proxy that always leaves from the same country. It costs no lookup at all, which also makes it the right choice for a deployment with no outbound access beyond its proxy. The timezone it picks is written to the log at startup, because a country with several zones gets its most populous one rather than a fact: `BROWSER_GEO=en-US` gives `America/New_York`. Set `BROWSER_TIMEZONE` if that isn't the one you want. A tag with no country in it, such as `fr`, sets the language only.
+
+**`LANG`** accepts both POSIX and tag forms, and the value is normalized before it reaches a browser:
 
 | You set | Both engines use |
 | ------- | ---------------- |
@@ -367,11 +383,15 @@ Both POSIX and tag forms work, and the value is normalized before it reaches a b
 | `pt-BR`       | `pt-BR` |
 | `zh_Hans_CN`  | `zh-Hans-CN` |
 | `fr`          | `fr` |
-| `C`, `POSIX`  | ignored |
+| `C`, `POSIX`  | ignored, falls through to `BROWSER_GEO` |
 
-Anything that isn't a language tag is ignored with a warning in the log, and each engine keeps its own default. That is deliberate: a malformed value would reach `navigator.languages` and the `Accept-Language` header verbatim, which is a more distinctive fingerprint than setting nothing at all.
+Anything that isn't a language tag is ignored with a warning in the log rather than passed on. That is deliberate: a malformed value would reach `navigator.languages` and the `Accept-Language` header verbatim, which is a more distinctive fingerprint than setting nothing at all. `C.UTF-8` is ignored for the same reason, and because it is a container default nobody chose.
 
-One thing to know before you set it: Camoufox derives its timezone from the exit IP, so forcing a language that country doesn't speak makes the browser's language and timezone disagree. Chrome uses the container's timezone (`TZ`, default `UTC`) no matter where traffic exits, so it can already disagree with the exit IP on its own; `LANG` doesn't change that.
+**`BROWSER_TIMEZONE`** takes any IANA zone. Pinning it costs no lookup, so it is also how an air-gapped deployment skips the exit-IP check entirely.
+
+Two things worth knowing. Forcing a language a country doesn't speak, or a timezone it isn't in, is a mismatch a site can see, so change one only if you know why. And some countries share a timezone definition with a neighbour: Norway reports `Europe/Berlin` and the Netherlands `Europe/Brussels`, which is correct rather than a bug, since those are the same zone with the same offset and the same daylight-saving rules.
+
+If the exit IP can't be reached to resolve a zone, Solverr falls back to the container's `TZ` and logs a warning; it does not fail the request. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
 
 ## Proxy & reliability
 
