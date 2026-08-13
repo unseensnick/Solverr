@@ -31,7 +31,7 @@ Flag anything in the block that could surprise an existing client, and make sure
 Stop and report rather than continuing if any of these fail:
 
 1. `git status` is clean apart from what you are about to commit, and the branch is `main`.
-2. The browser-free tests pass: `PYTHONPATH=src uv run --no-project python -m unittest test_detection test_response_shape test_request_validation test_browser_identity`.
+2. The browser-free tests pass: `PYTHONPATH=src uv run --no-project python -m unittest test_detection test_response_shape test_request_validation test_browser_identity test_geo`.
 3. Compile check: `uv run --no-project python -m py_compile src/*.py src/engines/*.py`.
 4. `[Unreleased]` actually has entries. An empty block means there is nothing to release.
 5. The version in `package.json` is the previous one, and no tag for the new version exists yet (`git tag -l v<version>`).

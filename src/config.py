@@ -101,6 +101,17 @@ def browser_locale() -> Optional[str]:
     return '-'.join(parts)
 
 
+def browser_timezone() -> Optional[str]:
+    """BROWSER_TIMEZONE: an IANA zone to pin both engines to, 'auto', or None.
+
+    'auto' and unset mean the same thing, deriving the zone from the egress IP
+    so it agrees with the exit country. Pinning it to a zone costs no lookup, so
+    an offline deployment sets this rather than an opt-out flag.
+    """
+    raw = os.environ.get('BROWSER_TIMEZONE', '').strip()
+    return raw or None
+
+
 def _int_env(name: str, default: int) -> int:
     raw = os.environ.get(name, str(default)).strip()
     try:

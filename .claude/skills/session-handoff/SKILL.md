@@ -68,7 +68,7 @@ For the memory pass, prefer updating an existing file over adding a near-duplica
 ## Step 4: Commit and verify
 
 1. Commit tracked doc changes (`CHANGELOG.md`, `README.md`, `CLAUDE.md`, `docs/dev/upstream-sync.md`) with a `docs(...)` subject. `Handoff.md` is never in that commit.
-2. Run the browser-free tests if any code changed: `PYTHONPATH=src uv run --no-project python -m unittest test_detection test_response_shape test_request_validation test_browser_identity`.
+2. Run the browser-free tests if any code changed: `PYTHONPATH=src uv run --no-project python -m unittest test_detection test_response_shape test_request_validation test_browser_identity test_geo`.
 3. Report the final branch state, so the owner knows whether anything is left to push, and whether the tag and image are published or pending.
 
 ## Solverr conventions the global skill cannot know

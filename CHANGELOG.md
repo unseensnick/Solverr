@@ -8,8 +8,12 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **Both engines now browse in the language you set with `LANG`.** Only Chrome read it before, so the two engines could serve the same site in different languages. The value is normalized to a language tag first: `en_US.UTF-8` reaches the browser as `en-US` instead of verbatim, and a value that isn't a language is ignored with a warning rather than passed through.
 
+- **`BROWSER_TIMEZONE` pins the browser to a timezone.** Set it to an IANA zone like `Europe/Berlin` and both engines use it with no lookup, which is also how an offline deployment avoids the egress check. Left unset, the zone is derived from the exit IP as before.
+
 ### Fixes
 
+- **A solve no longer fails because the browser's timezone could not be worked out.** Behind a proxy, an unreachable address-lookup service used to abort the whole request; it now falls back to the container's `TZ` with a warning in the log.
+- **Both engines report the same timezone.** Camoufox followed the exit IP while Chrome reported the container's timezone, so the same request could place the browser in two different places depending on which engine answered it.
 - **A URL that returns JSON now comes back as JSON, whichever engine solved it.** The stealth engine used to return the browser's built-in JSON viewer page instead of the payload, so the same request gave usable JSON through Chrome and markup through Camoufox.
 - **A solved response always reports the User-Agent that fetched it.** When the browser's user agent could not be read at startup, every response from that browser came back with an empty `userAgent`, which breaks reusing its cookies.
 

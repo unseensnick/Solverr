@@ -20,6 +20,7 @@ from invisible_playwright.async_api import InvisiblePlaywright
 from playwright_captcha import CaptchaType, ClickSolver, FrameworkType, TwoCaptchaSolver
 
 import config
+import geo
 import utils
 from async_runtime import get_runtime
 from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
@@ -84,19 +85,6 @@ def _to_playwright_cookies(cookies: list) -> list:
     return converted
 
 
-def _proxy_to_config(proxy: Optional[dict]) -> Optional[dict]:
-    """Convert a FlareSolverr proxy dict ({url, username, password}) to the
-    Playwright/Camoufox shape ({server, username, password})."""
-    if not proxy or 'url' not in proxy:
-        return None
-    cfg = {"server": proxy['url']}
-    if proxy.get('username'):
-        cfg['username'] = proxy['username']
-    if proxy.get('password'):
-        cfg['password'] = proxy['password']
-    return cfg
-
-
 def _user_agent_from(main_response) -> str:
     """The user agent the site was actually sent, or "" if it can't be read.
 
@@ -140,10 +128,16 @@ class StealthContext:
         return datetime.now() - self.last_used
 
     async def start(self):
+        # Resolved here, not left to the library: handing it a concrete zone
+        # returns before its own auto-resolution, which behind a proxy raises on
+        # a failed egress lookup and takes the whole launch down with it. Off the
+        # loop because a cold lookup blocks for seconds.
+        timezone = await asyncio.to_thread(geo.browser_timezone, self.proxy_config)
         self._ip = InvisiblePlaywright(
             headless=config.stealth_headless(),
             proxy=self.proxy_config,
             humanize=True,
+            timezone=timezone,
             # "auto" derives the language from the egress country, which keeps it
             # consistent with the exit IP. LANG overrides that for both engines.
             locale=config.browser_locale() or "auto",
@@ -200,7 +194,7 @@ class StealthEngine(Engine):
                 return session_id, False
 
         # Launch the browser outside the lock (it can take seconds).
-        ctx = StealthContext(_proxy_to_config(proxy))
+        ctx = StealthContext(geo.proxy_to_config(proxy))
         try:
             self._runtime.run(ctx.start(), timeout=config.stealth_start_timeout())
         except Exception:
@@ -297,7 +291,7 @@ class StealthEngine(Engine):
             ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
             ctx, _ = self._get_session(req.session, ttl)
         else:
-            ctx = StealthContext(_proxy_to_config(req.proxy))
+            ctx = StealthContext(geo.proxy_to_config(req.proxy))
             # Owned before start(): a launch that fails or times out has usually
             # already spawned the browser, and only the finally below closes it.
             own_ctx = True
