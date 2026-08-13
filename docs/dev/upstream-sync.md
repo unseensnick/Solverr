@@ -14,8 +14,8 @@ Run `/upstream-audit` to refresh it. The reference clones are siblings of this r
 
 | Upstream | Commit | Date audited | Notes |
 |---|---|---|---|
-| FlareSolverr | `0f05ed8` | 2026-07-25 | Fork point was `bb6f439` (2026-07-10), off FlareSolverr 3.5.0. Chrome engine, sessions, and utils reviewed; see the inherited list below. |
-| Byparr | `25194c3` | 2026-08-08 | The 2026-08-07/08 batch brought one behavior change worth having (CSP stripping, declined below), one Solverr already had (a networkidle timeout is non-fatal: every `wait_for_load_state` in `stealth_engine.py` is already wrapped), and one that does not apply (`maxTimeout` in milliseconds is Byparr adopting our contract). The rest is the `/load` endpoint, test-only dependency churn, and CI signing we have no equivalent of. |
+| FlareSolverr | `0f05ed8` | 2026-08-13 | Fork point was `bb6f439` (2026-07-10), off FlareSolverr 3.5.0. Chrome engine, sessions, and utils reviewed; see the inherited list below. No new commits since the 2026-07-25 audit. |
+| Byparr | `9afb3e0` | 2026-08-13 | 29 commits. Three taken: the Firefox JSON viewer off at launch (`46a3c68`), a locale knob for the browser language (`8cb5770`, adapted to `LANG`, see below), and the user agent read off the navigation request rather than `evaluate` (`d3a828e`, taken as a fallback since Solverr reads it once on the blank page and never 500'd the way ThePhaseless/Byparr#394 did). Their localized-detection rewrite (`8ef4c62`) is already covered and narrower than ours, see below. Not applicable: the CSP-strip fixes (`0c44ce1`, no such route here), the tmpfs `HOME` move (`c38a6f4`, our image is `python:3.14-slim` + pip with `HOME=/app`), and four CI cache commits (our `release-docker.yml` is tag-only and single-job, and the Dockerfile has no `ARG VERSION`). The rest is the `/load` endpoint, ruff config, and test churn. |
 
 ## Deliberately different
 
@@ -33,6 +33,8 @@ Cite one of these instead of re-arguing it. Change one only when the owner asks.
 - **The Turnstile checkbox is clicked by coordinate, and playwright-captcha is not in the free path at all.** Byparr hands the widget to playwright-captcha's ClickSolver. Its traversal into the widget's closed shadow root runs `evaluate_handle` (`solvers/click/common/shadow_root.py:53-55`), which the iframe's CSP blocks, so every nudge logged "call to eval() blocked by CSP" and the widget went unsolved. Solverr instead finds the widget through the frame tree (which sees an iframe inside a closed shadow root), takes its box with `frame_element().bounding_box()`, and clicks the checkbox with `page.mouse`. All protocol-level, so no CSP applies. That also retires the throwaway click page for the free path, since nothing injects init scripts there any more, and with it the race that let a widget be declared solved before it had rendered.
 - **No `/load` endpoint.** Byparr serves Open WebUI's external web loader (article extraction via trafilatura). Solverr's public surface is `/v1` plus the optional passthrough; a second content-extraction API is a different product.
 - **No `maxTimeout` alias in milliseconds.** Byparr added one for FlareSolverr drop-in compatibility. Solverr is native to that contract and already reads `maxTimeout` as milliseconds.
+- **`LANG` rather than a new `BROWSER_LOCALE`.** Byparr added `BROWSER_LOCALE` (`8cb5770`) because it had no language variable. Solverr inherited `LANG` from FlareSolverr, wired to Chrome's `--accept-lang` (`src/utils.py`), so a second variable would have meant one knob per engine. `LANG` now feeds both through `config.browser_locale()`. It is also normalized rather than forwarded: `invisible_core/prefs.py` only maps `_` to `-` and appends the base subtag, so a raw `LANG=en_US.UTF-8` would set `navigator.languages = ["en-US.UTF-8", "en"]` and a matching `Accept-Language`, which is a more distinctive fingerprint than leaving it unset. Values that are not language tags are dropped with a warning.
+- **Challenge detection stays in `detection.py`, not playwright-captcha.** Byparr replaced its title check with `detect_cloudflare_challenge` (`8ef4c62`). That helper is Playwright-typed, so the Chrome engine could not share it, and its interstitial check is one selector (`script[src*="/cdn-cgi/challenge-platform/"]`) that Solverr already has alongside `#challenge-form` and `#challenge-stage` (`src/detection.py`). Its turnstile set adds `script[src*="challenges.cloudflare.com/turnstile/v0"]`, deliberately not taken: `TURNSTILE_SELECTORS` also serves as the token locator (`stealth_engine.py`, `chrome_engine.py`), so matching the api.js tag would set `is_turnstile` on a page with no input to read and no rendered frame to click, sending it down the click path to burn the whole `maxTimeout`. The case it would catch, a widget not yet in the DOM, is already handled by the networkidle settle and re-detect in `_navigate_and_solve`.
 
 ## Inherited from FlareSolverr, byte-identical
 
@@ -41,7 +43,9 @@ These need no review until upstream changes them. Verified identical on 2026-07-
 - `src/undetected_chromedriver/` (the whole vendored package)
 - `src/tests.py`, `src/tests_sites.py` (they carry upstream's site list; leave as-is so the files stay mergeable, and do not add to them)
 - `html_samples/*.html`
-- `src/utils.py`, `src/bottle_plugins/`
+- `src/bottle_plugins/`
+
+`src/utils.py` was on this list until 2026-08-13 and now carries exactly one divergence, the `LANG` normalization below (`get_webdriver`, four comment lines and one call). Everything else in it is still upstream's, so diff it with `--strip-trailing-cr` before assuming otherwise: the working copy is CRLF and FlareSolverr's is LF, so a plain `diff` reports every line as changed.
 
 ## Taken
 
@@ -53,6 +57,7 @@ These need no review until upstream changes them. Verified identical on 2026-07-
 
 - **The paid CAPTCHA API path still depends on main-world `eval`.** It injects its token with `page.evaluate` (`captchas/*/apply.py`), which the Turnstile iframe's CSP blocks under Firefox, so the escalation cannot land a token even when the service returns one. Only fires when `CAPTCHA_SOLVER` and `CAPTCHA_API_KEY` are set. The free click path had the same problem and no longer uses playwright-captcha at all (see the divergence above).
 - **Real `solution.headers` on the stealth engine.** Byparr returns the response headers; Solverr sets `{}` to match the Chrome engine's `todo`. Now that the engine tracks the main-frame response for PDF detection, this is close to free. The catch: filling it in for stealth only would reintroduce the engine asymmetry that the v1.2.0 cookie fix removed, so it needs either a Chrome-side answer or a documented asymmetry.
+- **The two engines report different timezones.** Camoufox derives its timezone from the egress IP: `invisible_playwright` passes no `timezone`, and `invisible_core/_geo.py` treats an empty value the same as `"auto"` and always resolves it. Chrome takes the container's timezone from `TZ` (default `UTC`) and nothing derives it from the exit IP, which is FlareSolverr's behavior unchanged (`src/utils.py` handles `--accept-lang` and no timezone at all). So behind a proxy the same request reports one timezone through the stealth engine and another through Chrome, and `ENGINE_FALLBACK` decides which. Byparr has the Camoufox half of this and documents nothing about it. Found during the 2026-08-13 audit while wiring `LANG`; not caused by it, and not addressed by it. Options are feeding Chrome an egress-derived `TZ`, pinning Camoufox to the container's `TZ`, or accepting the split explicitly.
 
 ## When you take something
 
