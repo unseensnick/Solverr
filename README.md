@@ -206,7 +206,7 @@ Example response (truncated):
   "solution": {
     "url": "https://www.google.com/",
     "status": 200,
-    "headers": { "content-type": "text/html; charset=UTF-8" },
+    "headers": {},
     "response": "<!DOCTYPE html>...",
     "cookies": [ { "name": "cf_clearance", "value": "...", "domain": ".google.com", "path": "/" } ],
     "userAgent": "Mozilla/5.0 ...",
@@ -214,9 +214,11 @@ Example response (truncated):
   },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "1.2.1"
+  "version": "1.2.2"
 }
 ```
+
+`solution.headers` is always empty. Neither engine reports the response headers today, and FlareSolverr has never populated it either; the field stays in the payload for compatibility.
 
 ### `request.post`
 
@@ -343,7 +345,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | -------------------- | --------- | ----------------------------------------------------------------------------- |
 | `HEADLESS`           | `true`    | Run the Chrome engine headless (visible only for debugging).                   |
 | `DISABLE_MEDIA`      | `false`   | Block images/CSS/fonts by default to save bandwidth (both engines).            |
-| `LANG`               | none      | Chrome browser language. Eg `LANG=en_GB`.                                       |
+| `LANG`               | none      | Browser language for both engines. Accepts `en_US.UTF-8` or `en-US`. See below. |
 | `LOG_LEVEL`          | `info`    | `info` or `debug`.                                                             |
 | `LOG_FILE`           | none      | Also write logs to this file. Eg `/config/solverr.log`.                        |
 | `LOG_HTML`           | `false`   | Debug only: log all page HTML at `debug` level.                                |
@@ -351,6 +353,25 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `TZ`                 | `UTC`     | Container timezone (affects log timestamps). Eg `TZ=Europe/London`.            |
 | `PROMETHEUS_ENABLED` | `false`   | Enable the Prometheus exporter (see below).                                    |
 | `PROMETHEUS_PORT`    | `8192`    | Exporter port (expose it if enabled).                                          |
+
+### Browser language
+
+`LANG` sets the language both engines browse in, and it is unset by default. Leave it that way unless you need a specific language: Camoufox otherwise picks one from the country your traffic exits through, so a French proxy browses in French and the exit IP and the language agree.
+
+Both POSIX and tag forms work, and the value is normalized before it reaches a browser:
+
+| You set | Both engines use |
+| ------- | ---------------- |
+| `en_US.UTF-8` | `en-US` |
+| `de_DE@euro`  | `de-DE` |
+| `pt-BR`       | `pt-BR` |
+| `zh_Hans_CN`  | `zh-Hans-CN` |
+| `fr`          | `fr` |
+| `C`, `POSIX`  | ignored |
+
+Anything that isn't a language tag is ignored with a warning in the log, and each engine keeps its own default. That is deliberate: a malformed value would reach `navigator.languages` and the `Accept-Language` header verbatim, which is a more distinctive fingerprint than setting nothing at all.
+
+One thing to know before you set it: Camoufox derives its timezone from the exit IP, so forcing a language that country doesn't speak makes the browser's language and timezone disagree. Chrome uses the container's timezone (`TZ`, default `UTC`) no matter where traffic exits, so it can already disagree with the exit IP on its own; `LANG` doesn't change that.
 
 ## Proxy & reliability
 

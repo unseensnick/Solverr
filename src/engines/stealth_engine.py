@@ -97,6 +97,23 @@ def _proxy_to_config(proxy: Optional[dict]) -> Optional[dict]:
     return cfg
 
 
+def _user_agent_from(main_response) -> str:
+    """The user agent the site was actually sent, or "" if it can't be read.
+
+    The context caches its user agent once at start via page.evaluate, which
+    Firefox blocks under a strict CSP, and a failure there would otherwise leave
+    every response from that context reporting no user agent at all. The
+    navigation request's headers are what the server saw and need no eval.
+    """
+    if main_response is None:
+        return ""
+    try:
+        return main_response.request.headers.get("user-agent", "") or ""
+    except Exception:
+        logging.debug("could not read the user agent off the navigation request", exc_info=True)
+        return ""
+
+
 class StealthContext:
     """A live Camoufox browser + context + page + click-solver.
 
@@ -127,7 +144,14 @@ class StealthContext:
             headless=config.stealth_headless(),
             proxy=self.proxy_config,
             humanize=True,
-            locale="auto",
+            # "auto" derives the language from the egress country, which keeps it
+            # consistent with the exit IP. LANG overrides that for both engines.
+            locale=config.browser_locale() or "auto",
+            # Firefox renders application/json in a built-in viewer, so
+            # page.content() would hand back the viewer's markup instead of the
+            # payload. With it off, JSON renders as text in a <pre>, which is
+            # what the Chrome engine already returns for the same URL.
+            extra_prefs={"devtools.jsonview.enabled": False},
         )
         self.browser = await self._ip.__aenter__()
         self.context = await self.browser.new_context()
@@ -451,6 +475,10 @@ class StealthEngine(Engine):
             # already raised as an error by the "denied" detection above.
             result.status = 200
             result.cookies = _to_client_cookies(await ctx.context.cookies())
+            if not ctx.user_agent:
+                # Backfill the context so a session that started without one
+                # recovers for its later requests too, not just this response.
+                ctx.user_agent = _user_agent_from(main_response)
             result.user_agent = ctx.user_agent
             result.message = message
             # Parity with the Chrome engine: return the Turnstile token when a

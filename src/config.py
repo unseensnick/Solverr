@@ -5,7 +5,10 @@ stealth engine's settings live in one place. All values are optional; defaults
 keep the service behaving like stock FlareSolverr with the stealth engine
 available but not the default.
 """
+import logging
 import os
+import re
+from typing import Optional
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -52,6 +55,50 @@ def engine_fallback() -> bool:
     """When a request doesn't force an engine, retry on the other engine if the
     first is blocked, times out, or returns an unsolved challenge page."""
     return _bool('ENGINE_FALLBACK', True)
+
+
+# ---- Browser language (both engines) ----------------------------------------
+
+# A language tag both engines accept: 2-3 letter language, optional 4-letter
+# script, optional 2-letter or 3-digit region ('en', 'pt-BR', 'zh-Hans-CN').
+_LANGUAGE_TAG = re.compile(r'^([A-Za-z]{2,3})(?:-([A-Za-z]{4}))?(?:-([A-Za-z]{2}|[0-9]{3}))?$')
+
+# Warn once per bad value: this is read on every browser launch, so logging it
+# each time would bury the rest of the request log.
+_rejected_langs = set()
+
+
+def browser_locale() -> Optional[str]:
+    """LANG as a language tag for both engines, or None to leave it to them.
+
+    LANG is normally POSIX ('en_US.UTF-8', 'de_DE@euro'), which is not a language
+    tag, and handing that over raw is worse than ignoring it. Camoufox builds
+    both navigator.languages and the Accept-Language header from this value, so
+    'en_US.UTF-8' would become navigator.languages = ["en-US.UTF-8", "en"], a
+    pair no real browser produces and an obvious tell. Anything that does not
+    normalize to a real tag is dropped instead, leaving Camoufox to derive one
+    from the egress country and Chrome to send its own.
+    """
+    raw = os.environ.get('LANG', '').strip()
+    if not raw:
+        return None
+    tag = raw.split('.')[0].split('@')[0].replace('_', '-')
+    # 'C' and 'POSIX' are the locale-less locales, not languages.
+    if tag.upper() in ('C', 'POSIX'):
+        return None
+    match = _LANGUAGE_TAG.match(tag)
+    if not match:
+        if raw not in _rejected_langs:
+            _rejected_langs.add(raw)
+            logging.warning("LANG=%r is not a language tag; leaving the browser language alone", raw)
+        return None
+    language, script, region = match.groups()
+    parts = [language.lower()]
+    if script:
+        parts.append(script.title())
+    if region:
+        parts.append(region.upper())
+    return '-'.join(parts)
 
 
 def _int_env(name: str, default: int) -> int:

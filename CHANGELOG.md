@@ -4,6 +4,15 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Additions
+
+- **Both engines now browse in the language you set with `LANG`.** Only Chrome read it before, so the two engines could serve the same site in different languages. The value is normalized to a language tag first: `en_US.UTF-8` reaches the browser as `en-US` instead of verbatim, and a value that isn't a language is ignored with a warning rather than passed through.
+
+### Fixes
+
+- **A URL that returns JSON now comes back as JSON, whichever engine solved it.** The stealth engine used to return the browser's built-in JSON viewer page instead of the payload, so the same request gave usable JSON through Chrome and markup through Camoufox.
+- **A solved response always reports the User-Agent that fetched it.** When the browser's user agent could not be read at startup, every response from that browser came back with an empty `userAgent`, which breaks reusing its cookies.
+
 ## [1.2.2]
 
 ### Fixes

@@ -56,7 +56,7 @@ Brief one `Agent` with `subagent_type: Explore` per area that applies, all in a 
 | Engine and runtime constraints | Anything touching solving | `src/async_runtime.py` (one shared loop), `src/engines/stealth_engine.py` (per-context lock, throwaway click page), `src/session_reaper.py`. Ask what runs on which thread and what is serialized. |
 | Contract surface | Anything reaching a response | `src/dtos.py`, `_to_challenge_resolution` in `src/flaresolverr_service.py`, `utils.object_to_dict`. Ask what an unset field serializes to. |
 | Existing helpers (DRY) | New helper tempting | `src/detection.py`, `src/config.py`, `src/postform.py`, `src/utils.py`. Search before letting the plan invent one. |
-| Test coverage | Behavior changes | The browser-free tests (`src/test_detection.py`, `src/test_response_shape.py`) versus the browser suite (`src/tests.py`). Which one can actually cover the change. |
+| Test coverage | Behavior changes | The browser-free tests (`src/test_*.py`) versus the browser suite (`src/tests.py`). Which one can actually cover the change. |
 
 Brief each agent as a colleague who has not seen this conversation: state the goal, hand over exact paths and git commands, demand `file:line` citations, cap at ~500 words, and ask for a "things I'm uncertain about" section.
 

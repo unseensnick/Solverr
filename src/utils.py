@@ -11,6 +11,8 @@ import urllib.parse
 from selenium.webdriver.chrome.webdriver import WebDriver
 import undetected_chromedriver as uc
 
+import config
+
 FLARESOLVERR_VERSION = None
 PLATFORM_VERSION = None
 CHROME_EXE_PATH = None
@@ -152,7 +154,11 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # disable breaking popup
     options.add_argument("--disable-features=LocalNetworkAccessChecks")
 
-    language = os.environ.get('LANG', None)
+    # Normalized rather than passed through: LANG is usually POSIX
+    # ('en_US.UTF-8'), which is not a language tag, and --accept-lang builds the
+    # Accept-Language header straight from it. Shared with the stealth engine so
+    # one LANG means one language whichever engine serves the request.
+    language = config.browser_locale()
     if language is not None:
         options.add_argument('--accept-lang=%s' % language)
 
