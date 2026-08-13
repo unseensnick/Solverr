@@ -69,7 +69,26 @@ _rejected_langs = set()
 
 
 def browser_locale() -> Optional[str]:
-    """LANG as a language tag for both engines, or None to leave it to them.
+    """The browser language for both engines: LANG, else BROWSER_GEO, else None.
+
+    A LANG that is not a language falls through to BROWSER_GEO rather than
+    suppressing it, because 'C.UTF-8' is a common container default that nobody
+    set on purpose.
+    """
+    raw = os.environ.get('LANG', '').strip()
+    return (_language_tag(raw, 'LANG') if raw else None) or browser_geo()
+
+
+def browser_geo() -> Optional[str]:
+    """BROWSER_GEO as a language tag: one setting for both the browser language
+    and its timezone. LANG and BROWSER_TIMEZONE each win over it for their own
+    half, so it is a convenience rather than another layer of precedence."""
+    raw = os.environ.get('BROWSER_GEO', '').strip()
+    return _language_tag(raw, 'BROWSER_GEO') if raw else None
+
+
+def _language_tag(raw: str, source: str) -> Optional[str]:
+    """A POSIX or BCP-47 value as a language tag, or None if it is neither.
 
     LANG is normally POSIX ('en_US.UTF-8', 'de_DE@euro'), which is not a language
     tag, and handing that over raw is worse than ignoring it. Camoufox builds
@@ -79,9 +98,6 @@ def browser_locale() -> Optional[str]:
     normalize to a real tag is dropped instead, leaving Camoufox to derive one
     from the egress country and Chrome to send its own.
     """
-    raw = os.environ.get('LANG', '').strip()
-    if not raw:
-        return None
     tag = raw.split('.')[0].split('@')[0].replace('_', '-')
     # 'C' and 'POSIX' are the locale-less locales, not languages.
     if tag.upper() in ('C', 'POSIX'):
@@ -90,7 +106,8 @@ def browser_locale() -> Optional[str]:
     if not match:
         if raw not in _rejected_langs:
             _rejected_langs.add(raw)
-            logging.warning("LANG=%r is not a language tag; leaving the browser language alone", raw)
+            logging.warning("%s=%r is not a language tag; leaving the browser language alone",
+                            source, raw)
         return None
     language, script, region = match.groups()
     parts = [language.lower()]

@@ -10,6 +10,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **`BROWSER_TIMEZONE` pins the browser to a timezone.** Set it to an IANA zone like `Europe/Berlin` and both engines use it with no lookup, which is also how an offline deployment avoids the egress check. Left unset, the zone is derived from the exit IP as before.
 
+- **`BROWSER_GEO` sets the browser's language and timezone together.** One tag like `de-DE` puts both engines in German and in `Europe/Berlin`, with no lookup at all, which is the shortest way to match a proxy that always exits the same country. The chosen timezone is written to the log, and `LANG` and `BROWSER_TIMEZONE` each still win for their own half.
+
 ### Fixes
 
 - **A solve no longer fails because the browser's timezone could not be worked out.** Behind a proxy, an unreachable address-lookup service used to abort the whole request; it now falls back to the container's `TZ` with a warning in the log.

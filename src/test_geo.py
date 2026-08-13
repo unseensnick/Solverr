@@ -7,6 +7,7 @@ cover the precedence chain, the cache, and every way resolution can go wrong.
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_geo
 """
 import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -25,7 +26,7 @@ def _tz(proxy):
 def _env(**overrides):
     """os.environ with BROWSER_TIMEZONE and TZ set only as given."""
     env = {k: v for k, v in os.environ.items()
-           if k not in ('BROWSER_TIMEZONE', 'TZ', 'SESSION_TTL_MINUTES')}
+           if k not in ('BROWSER_TIMEZONE', 'BROWSER_GEO', 'LANG', 'TZ', 'SESSION_TTL_MINUTES')}
     env.update({k: v for k, v in overrides.items() if v is not None})
     return patch.dict(os.environ, env, clear=True)
 
@@ -121,6 +122,119 @@ class ResolutionFailureTest(unittest.TestCase):
              self.assertLogs(level='WARNING') as logs:
             geo._from_egress(geo.proxy_to_config(PROXY))
         self.assertNotIn('s3cr3t-pass', logs.output[0])
+
+
+ZONE_TAB = (
+    "# comment line, skipped\n"
+    "CH,DE,LI\t+4723+00832\tEurope/Zurich\tSwitzerland\n"
+    "DE,DK,NO,SE,SJ\t+5230+01322\tEurope/Berlin\tmost of Germany\n"
+    "US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)\n"
+    "US\t+415100-0873900\tAmerica/Chicago\tCentral (most areas)\n"
+    "BR\t-0351-03225\tAmerica/Noronha\tAtlantic islands\n"
+    "BR\t-2332-04637\tAmerica/Sao_Paulo\tBrazil (southeast)\n"
+)
+
+
+def _with_zone_tab(content=ZONE_TAB):
+    """Point the table parser at a fixture instead of the system tzdata."""
+    handle = tempfile.NamedTemporaryFile('w', suffix='.tab', delete=False, encoding='utf-8')
+    handle.write(content)
+    handle.close()
+    return patch.object(geo, '_ZONE_TAB_PATHS', (handle.name,))
+
+
+class ZoneTableTest(unittest.TestCase):
+
+    def setUp(self):
+        geo.reset_cache()
+
+    def test_a_country_maps_to_its_zone(self):
+        with _with_zone_tab():
+            self.assertEqual(geo._zone_for_region('DE'), 'Europe/Berlin')
+
+    def test_the_most_populous_zone_wins_for_a_multi_zone_country(self):
+        with _with_zone_tab():
+            self.assertEqual(geo._zone_for_region('US'), 'America/New_York')
+
+    def test_a_country_sharing_a_row_maps_to_that_row(self):
+        with _with_zone_tab():
+            self.assertEqual(geo._zone_for_region('NO'), 'Europe/Berlin')
+
+    def test_an_unlisted_country_has_no_zone(self):
+        with _with_zone_tab():
+            self.assertIsNone(geo._zone_for_region('ZZ'))
+
+    def test_a_country_is_credited_only_to_the_row_that_leads_with_it(self):
+        # Germany also appears on the Swiss row, which sorts first.
+        with _with_zone_tab():
+            self.assertEqual(geo._zone_for_region('DE'), 'Europe/Berlin')
+
+    def test_a_population_override_beats_the_leading_row(self):
+        with _with_zone_tab():
+            self.assertEqual(geo._zone_for_region('BR'), 'America/Sao_Paulo')
+
+    def test_an_override_naming_an_unknown_zone_is_ignored(self):
+        with _with_zone_tab(), \
+             patch.dict(geo._POPULATION_ZONES, {'US': 'America/Nowhere'}):
+            self.assertEqual(geo._zone_for_region('US'), 'America/New_York')
+
+    def test_a_missing_table_is_empty(self):
+        with patch.object(geo, '_ZONE_TAB_PATHS', ('/nonexistent/zone1970.tab',)), \
+             self.assertLogs(level='WARNING'):
+            self.assertEqual(geo._zone_table(), {})
+
+
+class RegionTest(unittest.TestCase):
+
+    def test_a_region_subtag_is_the_country(self):
+        self.assertEqual(geo._region_of('de-DE'), 'DE')
+
+    def test_a_script_subtag_is_skipped(self):
+        self.assertEqual(geo._region_of('zh-Hans-CN'), 'CN')
+
+    def test_a_bare_language_has_no_country(self):
+        self.assertIsNone(geo._region_of('fr'))
+
+    def test_a_numeric_region_is_not_a_country(self):
+        self.assertIsNone(geo._region_of('es-419'))
+
+
+class BrowserGeoTest(unittest.TestCase):
+
+    def setUp(self):
+        geo.reset_cache()
+
+    def test_it_sets_the_timezone(self):
+        with _env(BROWSER_GEO='de-DE'), _with_zone_tab():
+            self.assertEqual(_tz(PROXY), 'Europe/Berlin')
+
+    def test_it_costs_no_egress_lookup(self):
+        with _env(BROWSER_GEO='de-DE'), _with_zone_tab(), \
+             patch.object(geo, '_from_egress') as resolve:
+            _tz(PROXY)
+        resolve.assert_not_called()
+
+    def test_an_explicit_timezone_wins_over_it(self):
+        with _env(BROWSER_GEO='de-DE', BROWSER_TIMEZONE='America/Chicago'), _with_zone_tab():
+            self.assertEqual(_tz(PROXY), 'America/Chicago')
+
+    def test_an_explicit_auto_asks_for_the_exit_ip_instead(self):
+        with _env(BROWSER_GEO='de-DE', BROWSER_TIMEZONE='auto'), _with_zone_tab(), \
+             patch.object(geo, '_from_egress', return_value='Europe/Oslo'):
+            self.assertEqual(_tz(PROXY), 'Europe/Oslo')
+
+    def test_a_countryless_tag_falls_back_to_the_exit_ip(self):
+        with _env(BROWSER_GEO='fr'), _with_zone_tab(), \
+             patch.object(geo, '_from_egress', return_value='Europe/Oslo'), \
+             self.assertLogs(level='WARNING'):
+            self.assertEqual(_tz(PROXY), 'Europe/Oslo')
+
+    def test_a_missing_table_falls_back_to_the_exit_ip(self):
+        with _env(BROWSER_GEO='de-DE'), \
+             patch.object(geo, '_ZONE_TAB_PATHS', ('/nonexistent/zone1970.tab',)), \
+             patch.object(geo, '_from_egress', return_value='Europe/Oslo'), \
+             self.assertLogs(level='WARNING'):
+            self.assertEqual(_tz(PROXY), 'Europe/Oslo')
 
 
 class _Driver:

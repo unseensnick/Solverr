@@ -14,11 +14,13 @@ import config
 from engines.stealth_engine import _user_agent_from
 
 
-def _locale_for(value):
-    """config.browser_locale() with LANG set to `value` (None means unset)."""
-    env = {k: v for k, v in os.environ.items() if k != 'LANG'}
+def _locale_for(value, geo=None):
+    """config.browser_locale() with LANG and BROWSER_GEO set (None means unset)."""
+    env = {k: v for k, v in os.environ.items() if k not in ('LANG', 'BROWSER_GEO')}
     if value is not None:
         env['LANG'] = value
+    if geo is not None:
+        env['BROWSER_GEO'] = geo
     with patch.dict(os.environ, env, clear=True):
         return config.browser_locale()
 
@@ -74,6 +76,21 @@ class BrowserLocaleTest(unittest.TestCase):
         with self.assertLogs(level='WARNING') as logs:
             _locale_for('gibberish!')
         self.assertIn('gibberish!', logs.output[0])
+
+
+class BrowserGeoLanguageTest(unittest.TestCase):
+
+    def test_it_supplies_the_language_when_lang_is_unset(self):
+        self.assertEqual(_locale_for(None, geo='de-DE'), 'de-DE')
+
+    def test_lang_wins_over_it(self):
+        self.assertEqual(_locale_for('fr_FR.UTF-8', geo='de-DE'), 'fr-FR')
+
+    def test_a_container_default_lang_falls_through_to_it(self):
+        self.assertEqual(_locale_for('C.UTF-8', geo='de-DE'), 'de-DE')
+
+    def test_it_is_normalized_like_lang(self):
+        self.assertEqual(_locale_for(None, geo='pt_br'), 'pt-BR')
 
 
 class StealthUserAgentTest(unittest.TestCase):
