@@ -206,7 +206,7 @@ Example response (truncated):
   "solution": {
     "url": "https://www.google.com/",
     "status": 200,
-    "headers": { "content-type": "text/html; charset=UTF-8" },
+    "headers": {},
     "response": "<!DOCTYPE html>...",
     "cookies": [ { "name": "cf_clearance", "value": "...", "domain": ".google.com", "path": "/" } ],
     "userAgent": "Mozilla/5.0 ...",
@@ -214,9 +214,11 @@ Example response (truncated):
   },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "1.2.1"
+  "version": "1.3.0"
 }
 ```
+
+`solution.headers` is always empty. Neither engine reports the response headers today, and FlareSolverr has never populated it either; the field stays in the payload for compatibility.
 
 ### `request.post`
 
@@ -343,14 +345,55 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | -------------------- | --------- | ----------------------------------------------------------------------------- |
 | `HEADLESS`           | `true`    | Run the Chrome engine headless (visible only for debugging).                   |
 | `DISABLE_MEDIA`      | `false`   | Block images/CSS/fonts by default to save bandwidth (both engines).            |
-| `LANG`               | none      | Chrome browser language. Eg `LANG=en_GB`.                                       |
+| `BROWSER_GEO`        | none      | One tag setting the browser's language **and** timezone. Eg `de-DE`. See below. |
+| `LANG`               | none      | Browser language for both engines. Accepts `en_US.UTF-8` or `en-US`. See below. |
+| `BROWSER_TIMEZONE`   | `auto`    | Browser timezone for both engines: an IANA zone, or `auto` to follow the exit IP. See below. |
 | `LOG_LEVEL`          | `info`    | `info` or `debug`.                                                             |
 | `LOG_FILE`           | none      | Also write logs to this file. Eg `/config/solverr.log`.                        |
 | `LOG_HTML`           | `false`   | Debug only: log all page HTML at `debug` level.                                |
 | `HOST` / `PORT`      | `0.0.0.0` / `8191` | Listening interface and port. Rarely changed under Docker.           |
-| `TZ`                 | `UTC`     | Container timezone (affects log timestamps). Eg `TZ=Europe/London`.            |
+| `TZ`                 | `UTC`     | Container timezone: log timestamps, and the browser's timezone when nothing resolves one. Eg `TZ=Europe/London`. |
 | `PROMETHEUS_ENABLED` | `false`   | Enable the Prometheus exporter (see below).                                    |
 | `PROMETHEUS_PORT`    | `8192`    | Exporter port (expose it if enabled).                                          |
+
+### Browser language and timezone
+
+A site can compare the language and clock a browser reports against the country its IP is in, so both engines are always given the same answer for both, from the same lookup. Out of the box you need to set nothing: the timezone and the language are worked out together from the exit IP once and reused, so they always name the same country and a request answered by either engine looks the same.
+
+Set something only when you need a specific result. There are three knobs and they layer:
+
+| Set this | Effect | Costs a lookup? |
+| -------- | ------ | --------------- |
+| nothing | Timezone and language both from the exit IP | once per proxy |
+| `BROWSER_GEO=de-DE` | German, `Europe/Berlin` | no |
+| `LANG=de-DE` | German, timezone still from the exit IP | once per proxy |
+| `BROWSER_TIMEZONE=Europe/Berlin` | `Europe/Berlin`, language unchanged | no |
+| `BROWSER_TIMEZONE=auto` | Exit IP, ignoring any `BROWSER_GEO` | once per proxy |
+
+`LANG` and `BROWSER_TIMEZONE` each override `BROWSER_GEO` for their own half, so `BROWSER_GEO=en-US` with `BROWSER_TIMEZONE=America/Chicago` gives American English on Chicago time.
+
+**`BROWSER_GEO`** is the short way to match a proxy that always leaves from the same country. It costs no lookup at all, which also makes it the right choice for a deployment with no outbound access beyond its proxy. The timezone it picks is written to the log at startup, because a country with several zones gets its most populous one rather than a fact: `BROWSER_GEO=en-US` gives `America/New_York`. Set `BROWSER_TIMEZONE` if that isn't the one you want. A tag with no country in it, such as `fr`, sets the language only.
+
+**`LANG`** accepts both POSIX and tag forms, and the value is normalized before it reaches a browser:
+
+| You set | Both engines use |
+| ------- | ---------------- |
+| `en_US.UTF-8` | `en-US` |
+| `de_DE@euro`  | `de-DE` |
+| `pt-BR`       | `pt-BR` |
+| `zh_Hans_CN`  | `zh-Hans-CN` |
+| `fr`          | `fr` |
+| `C`, `POSIX`  | ignored, falls through to `BROWSER_GEO` then the exit IP |
+
+Anything that isn't a language tag is ignored with a warning in the log rather than passed on. That is deliberate: a malformed value would reach `navigator.languages` and the `Accept-Language` header verbatim, which is a more distinctive fingerprint than setting nothing at all. `C.UTF-8` is ignored for the same reason, and because it is a container default nobody chose.
+
+Whatever the language ends up being, both engines report it as the two-entry `navigator.languages` a desktop browser sends: `de-DE` becomes `["de-DE", "de"]`.
+
+**`BROWSER_TIMEZONE`** takes any IANA zone. Pinning it costs no lookup, so it is also how an air-gapped deployment skips the exit-IP check entirely.
+
+Two things worth knowing. Forcing a language a country doesn't speak, or a timezone it isn't in, is a mismatch a site can see, so change one only if you know why. And some countries share a timezone definition with a neighbour: Norway reports `Europe/Berlin` and the Netherlands `Europe/Brussels`, which is correct rather than a bug, since those are the same zone with the same offset and the same daylight-saving rules.
+
+If the exit IP can't be reached, Solverr falls back to the container's `TZ` for the timezone and `en-US` for the language, logs a warning, and carries on; it does not fail the request. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
 
 ## Proxy & reliability
 

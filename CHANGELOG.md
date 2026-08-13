@@ -4,6 +4,27 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.3.0]
+
+### Additions
+
+- **`LANG` now sets the browser language on both engines.** Only Chrome read it before. The value is normalized to a language tag first, so `en_US.UTF-8` reaches the browser as `en-US` instead of verbatim, and a value that isn't a language is ignored with a warning rather than passed through.
+
+- **`BROWSER_TIMEZONE` pins the browser to a timezone.** Set it to an IANA zone like `Europe/Berlin` and both engines use it with no lookup, which is also how an offline deployment avoids the egress check. Left unset, the zone is derived from the exit IP as before.
+
+- **`BROWSER_GEO` sets the browser's language and timezone together.** One tag like `de-DE` puts both engines in German and in `Europe/Berlin`, with no lookup at all, which is the shortest way to match a proxy that always exits the same country. The chosen timezone is written to the log, and `LANG` and `BROWSER_TIMEZONE` each still win for their own half.
+
+### Fixes
+
+- **A solve no longer fails because the browser's timezone could not be worked out.** Behind a proxy, an unreachable address-lookup service used to abort the whole request; it now falls back to the container's `TZ` with a warning in the log.
+- **Both engines report the same timezone and the same language.** Camoufox followed the exit IP while Chrome reported the container's timezone and its own build's language, so the same request could place the browser in two different countries depending on which engine answered it, and a fallback could change it mid-session. Both now come from one lookup. Chrome also reports the two-entry `navigator.languages` a desktop browser sends, instead of a single entry.
+- **A URL that returns JSON now comes back as JSON, whichever engine solved it.** The stealth engine used to return the browser's built-in JSON viewer page instead of the payload, so the same request gave usable JSON through Chrome and markup through Camoufox.
+- **A solved response always reports the User-Agent that fetched it.** When the browser's user agent could not be read at startup, every response from that browser came back with an empty `userAgent`, which breaks reusing its cookies.
+
+### Other
+
+- The image ships the geolocation database used to work out the browser's timezone, instead of downloading it on the first solve. That adds about 120 MB to the image and removes a download from a fresh container's first request. The copy refreshes with each release.
+
 ## [1.2.2]
 
 ### Fixes

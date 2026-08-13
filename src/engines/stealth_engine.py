@@ -20,6 +20,7 @@ from invisible_playwright.async_api import InvisiblePlaywright
 from playwright_captcha import CaptchaType, ClickSolver, FrameworkType, TwoCaptchaSolver
 
 import config
+import geo
 import utils
 from async_runtime import get_runtime
 from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
@@ -84,17 +85,21 @@ def _to_playwright_cookies(cookies: list) -> list:
     return converted
 
 
-def _proxy_to_config(proxy: Optional[dict]) -> Optional[dict]:
-    """Convert a FlareSolverr proxy dict ({url, username, password}) to the
-    Playwright/Camoufox shape ({server, username, password})."""
-    if not proxy or 'url' not in proxy:
-        return None
-    cfg = {"server": proxy['url']}
-    if proxy.get('username'):
-        cfg['username'] = proxy['username']
-    if proxy.get('password'):
-        cfg['password'] = proxy['password']
-    return cfg
+def _user_agent_from(main_response) -> str:
+    """The user agent the site was actually sent, or "" if it can't be read.
+
+    The context caches its user agent once at start via page.evaluate, which
+    Firefox blocks under a strict CSP, and a failure there would otherwise leave
+    every response from that context reporting no user agent at all. The
+    navigation request's headers are what the server saw and need no eval.
+    """
+    if main_response is None:
+        return ""
+    try:
+        return main_response.request.headers.get("user-agent", "") or ""
+    except Exception:
+        logging.debug("could not read the user agent off the navigation request", exc_info=True)
+        return ""
 
 
 class StealthContext:
@@ -123,11 +128,24 @@ class StealthContext:
         return datetime.now() - self.last_used
 
     async def start(self):
+        # Resolved here, not left to the library: handing it a concrete zone
+        # returns before its own auto-resolution, which behind a proxy raises on
+        # a failed egress lookup and takes the whole launch down with it. Off the
+        # loop because a cold lookup blocks for seconds.
+        timezone, language = await asyncio.to_thread(geo.browser_identity, self.proxy_config)
         self._ip = InvisiblePlaywright(
             headless=config.stealth_headless(),
             proxy=self.proxy_config,
             humanize=True,
-            locale="auto",
+            timezone=timezone,
+            # Concrete rather than "auto" so this browser and Chrome get the
+            # same country, and so the library resolves nothing of its own.
+            locale=language,
+            # Firefox renders application/json in a built-in viewer, so
+            # page.content() would hand back the viewer's markup instead of the
+            # payload. With it off, JSON renders as text in a <pre>, which is
+            # what the Chrome engine already returns for the same URL.
+            extra_prefs={"devtools.jsonview.enabled": False},
         )
         self.browser = await self._ip.__aenter__()
         self.context = await self.browser.new_context()
@@ -176,7 +194,7 @@ class StealthEngine(Engine):
                 return session_id, False
 
         # Launch the browser outside the lock (it can take seconds).
-        ctx = StealthContext(_proxy_to_config(proxy))
+        ctx = StealthContext(geo.proxy_to_config(proxy))
         try:
             self._runtime.run(ctx.start(), timeout=config.stealth_start_timeout())
         except Exception:
@@ -273,7 +291,7 @@ class StealthEngine(Engine):
             ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
             ctx, _ = self._get_session(req.session, ttl)
         else:
-            ctx = StealthContext(_proxy_to_config(req.proxy))
+            ctx = StealthContext(geo.proxy_to_config(req.proxy))
             # Owned before start(): a launch that fails or times out has usually
             # already spawned the browser, and only the finally below closes it.
             own_ctx = True
@@ -451,6 +469,10 @@ class StealthEngine(Engine):
             # already raised as an error by the "denied" detection above.
             result.status = 200
             result.cookies = _to_client_cookies(await ctx.context.cookies())
+            if not ctx.user_agent:
+                # Backfill the context so a session that started without one
+                # recovers for its later requests too, not just this response.
+                ctx.user_agent = _user_agent_from(main_response)
             result.user_agent = ctx.user_agent
             result.message = message
             # Parity with the Chrome engine: return the Turnstile token when a

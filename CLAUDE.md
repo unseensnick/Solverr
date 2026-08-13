@@ -18,6 +18,7 @@ uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a b
 - Sessions: each engine keeps its own pool; a background reaper (`session_reaper.py`) closes idle browsers. Solve once, reuse the cookie many times.
 - Escalation ladder for an `auto` request: Chrome → Camoufox click-solve → (optional, dormant) paid CAPTCHA API.
 - **A Turnstile checkbox is clicked by coordinate, with no JS evaluation.** The widget's iframe sits in a closed shadow root, so `query_selector` cannot find it, but `page.frames` lists it anyway; `frame_element().bounding_box()` gives its rect and `page.mouse` clicks the checkbox. This exists because playwright-captcha's shadow-root traversal uses `evaluate_handle`, and the iframe's CSP blocks eval under Firefox, which silently broke widget solving.
+- **Solverr resolves the browser's timezone and language itself (`geo.py`), and hands both engines the same pair.** Left alone, the stealth stack resolves both from the exit IP on every launch, inside the library, uncached, and raises behind a proxy when the lookup fails, which kills the launch; Chrome derived neither, so the two engines disagreed about the country. Passing concrete values returns before that fatal branch. They travel together because the pairing is what a site checks. Chrome follows via `Emulation.setTimezoneOverride` (which moves its ICU clock rather than patching `Intl` in the page) and `--accept-lang`. A failed lookup falls back to `TZ` and `en-US`: a wrong zone still solves, no browser does not.
 - **playwright-captcha only ever touches a throwaway page**, and only the paid escalation reaches it now. Preparing a solver injects init scripts (one rewrites `Element.prototype.attachShadow`) that a Cloudflare interstitial will not clear while they are present, and Playwright cannot remove an init script. Verified live: an interstitial clears in ~3s without them and never in 40s with them.
 
 ## Key decisions (WHY)
@@ -32,7 +33,7 @@ uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a b
 - `src/flaresolverr_service.py` — controller: `/v1` commands, engine selection + fallback, per-host memory, session commands.
 - `src/engines/` — `base.py` (Engine + SolveResult), `chrome_engine.py`, `stealth_engine.py`.
 - `src/async_runtime.py`, `src/session_reaper.py`, `src/sessions.py` — stealth event loop, idle reaper, Chrome session store.
-- `src/detection.py` (shared challenge/title/selector lists), `src/config.py` (env), `src/postform.py`, `src/dtos.py`.
+- `src/detection.py` (shared challenge/title/selector lists), `src/geo.py` (browser timezone for both engines), `src/config.py` (env), `src/postform.py`, `src/dtos.py`.
 - `.claude/rules/workflow.md` — CHANGELOG + commit rules, release-cut, public-facing naming, git hooks. `code-quality.md` — coding principles. `security.md` / `error-handling.md` — path-scoped to `src/`. `plan-output.md` — how a findings report or plan is structured. `prose-style.md` — sentence-level writing for every output.
 - `docs/dev/upstream-sync.md` — what has been taken from FlareSolverr and Byparr, through which commit, and every deliberate divergence with its reasoning. Read it before calling something drift.
 - `.githooks/` — tracked commit-msg and pre-commit hooks. Activate with `git config core.hooksPath .githooks`.

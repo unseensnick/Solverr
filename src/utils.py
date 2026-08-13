@@ -11,6 +11,8 @@ import urllib.parse
 from selenium.webdriver.chrome.webdriver import WebDriver
 import undetected_chromedriver as uc
 
+import geo
+
 FLARESOLVERR_VERSION = None
 PLATFORM_VERSION = None
 CHROME_EXE_PATH = None
@@ -152,9 +154,12 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # disable breaking popup
     options.add_argument("--disable-features=LocalNetworkAccessChecks")
 
-    language = os.environ.get('LANG', None)
-    if language is not None:
-        options.add_argument('--accept-lang=%s' % language)
+    # Always set, and shared with the stealth engine, so one request does not
+    # change language depending on which engine answered it. Sent as the
+    # "tag, base" pair a desktop browser sends, since --accept-lang is passed
+    # through verbatim and a single-element navigator.languages stands out.
+    options.add_argument('--accept-lang=%s' % geo.accept_language(
+        geo.browser_language(geo.proxy_to_config(proxy))))
 
     # Fix for Chrome 117 | https://github.com/FlareSolverr/FlareSolverr/issues/910
     if USER_AGENT is not None:

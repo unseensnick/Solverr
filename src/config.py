@@ -5,7 +5,10 @@ stealth engine's settings live in one place. All values are optional; defaults
 keep the service behaving like stock FlareSolverr with the stealth engine
 available but not the default.
 """
+import logging
 import os
+import re
+from typing import Optional
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -52,6 +55,78 @@ def engine_fallback() -> bool:
     """When a request doesn't force an engine, retry on the other engine if the
     first is blocked, times out, or returns an unsolved challenge page."""
     return _bool('ENGINE_FALLBACK', True)
+
+
+# ---- Browser language (both engines) ----------------------------------------
+
+# A language tag both engines accept: 2-3 letter language, optional 4-letter
+# script, optional 2-letter or 3-digit region ('en', 'pt-BR', 'zh-Hans-CN').
+_LANGUAGE_TAG = re.compile(r'^([A-Za-z]{2,3})(?:-([A-Za-z]{4}))?(?:-([A-Za-z]{2}|[0-9]{3}))?$')
+
+# Warn once per bad value: this is read on every browser launch, so logging it
+# each time would bury the rest of the request log.
+_rejected_langs = set()
+
+
+def browser_locale() -> Optional[str]:
+    """The browser language for both engines: LANG, else BROWSER_GEO, else None.
+
+    A LANG that is not a language falls through to BROWSER_GEO rather than
+    suppressing it, because 'C.UTF-8' is a common container default that nobody
+    set on purpose.
+    """
+    raw = os.environ.get('LANG', '').strip()
+    return (_language_tag(raw, 'LANG') if raw else None) or browser_geo()
+
+
+def browser_geo() -> Optional[str]:
+    """BROWSER_GEO as a language tag: one setting for both the browser language
+    and its timezone. LANG and BROWSER_TIMEZONE each win over it for their own
+    half, so it is a convenience rather than another layer of precedence."""
+    raw = os.environ.get('BROWSER_GEO', '').strip()
+    return _language_tag(raw, 'BROWSER_GEO') if raw else None
+
+
+def _language_tag(raw: str, source: str) -> Optional[str]:
+    """A POSIX or BCP-47 value as a language tag, or None if it is neither.
+
+    LANG is normally POSIX ('en_US.UTF-8', 'de_DE@euro'), which is not a language
+    tag, and handing that over raw is worse than ignoring it. Camoufox builds
+    both navigator.languages and the Accept-Language header from this value, so
+    'en_US.UTF-8' would become navigator.languages = ["en-US.UTF-8", "en"], a
+    pair no real browser produces and an obvious tell. Anything that does not
+    normalize to a real tag is dropped instead, leaving Camoufox to derive one
+    from the egress country and Chrome to send its own.
+    """
+    tag = raw.split('.')[0].split('@')[0].replace('_', '-')
+    # 'C' and 'POSIX' are the locale-less locales, not languages.
+    if tag.upper() in ('C', 'POSIX'):
+        return None
+    match = _LANGUAGE_TAG.match(tag)
+    if not match:
+        if raw not in _rejected_langs:
+            _rejected_langs.add(raw)
+            logging.warning("%s=%r is not a language tag; leaving the browser language alone",
+                            source, raw)
+        return None
+    language, script, region = match.groups()
+    parts = [language.lower()]
+    if script:
+        parts.append(script.title())
+    if region:
+        parts.append(region.upper())
+    return '-'.join(parts)
+
+
+def browser_timezone() -> Optional[str]:
+    """BROWSER_TIMEZONE: an IANA zone to pin both engines to, 'auto', or None.
+
+    'auto' and unset mean the same thing, deriving the zone from the egress IP
+    so it agrees with the exit country. Pinning it to a zone costs no lookup, so
+    an offline deployment sets this rather than an opt-out flag.
+    """
+    raw = os.environ.get('BROWSER_TIMEZONE', '').strip()
+    return raw or None
 
 
 def _int_env(name: str, default: int) -> int:

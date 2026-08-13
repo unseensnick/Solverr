@@ -19,6 +19,7 @@ from selenium.webdriver.support.expected_conditions import (
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.wait import WebDriverWait
 
+import geo
 import utils
 from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
                        CHALLENGE_TITLES, CHALLENGE_SELECTORS, TURNSTILE_SELECTORS)
@@ -56,6 +57,7 @@ class ChromeEngine(Engine):
             else:
                 driver = utils.get_webdriver(req.proxy)
                 logging.debug('New instance of webdriver has been created to perform the request')
+            _apply_timezone(driver, req.proxy)
             return func_timeout(timeout, self._evil_logic, (req, driver, method))
         except FunctionTimedOut:
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
@@ -217,6 +219,25 @@ class ChromeEngine(Engine):
             result.screenshot = driver.get_screenshot_as_base64()
 
         return result
+
+
+def _apply_timezone(driver: WebDriver, proxy: dict = None) -> None:
+    """Put Chrome in the same timezone the stealth engine would use.
+
+    Chrome otherwise reports the container's timezone whatever the traffic exits
+    through, so the same request answered by the two engines disagreed about
+    where the browser was. Emulation.setTimezoneOverride changes the browser's
+    own ICU clock rather than patching Intl in the page, so nothing in the
+    document looks rewritten.
+
+    Best-effort by design: a browser in the wrong timezone still solves, and this
+    must never be the reason a request fails.
+    """
+    zone = geo.browser_timezone(geo.proxy_to_config(proxy))
+    try:
+        driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": zone})
+    except Exception:
+        logging.debug("could not set the browser timezone to %s", zone, exc_info=True)
 
 
 def click_verify(driver: WebDriver, num_tabs: int = 1):

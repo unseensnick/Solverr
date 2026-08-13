@@ -1,4 +1,5 @@
 import logging
+import os
 import platform
 import sys
 import threading
@@ -7,6 +8,7 @@ from urllib.parse import urlparse
 
 import config
 import detection
+import geo
 import utils
 from dtos import (STATUS_ERROR, STATUS_OK, ChallengeResolutionResultT,
                   ChallengeResolutionT, HealthResponse, IndexResponse,
@@ -52,6 +54,13 @@ def test_browser_installation():
     logging.info("Launching web browser...")
     user_agent = utils.get_user_agent()
     logging.info("Solverr User-Agent: " + user_agent)
+
+    # Resolve the browser timezone once here, the way the user agent is, so no
+    # request pays for the egress lookup. A per-request proxy still resolves on
+    # first use; the configured one is the common case.
+    env_proxy = {"url": os.environ.get('PROXY_URL')} if os.environ.get('PROXY_URL') else None
+    logging.info("Browser timezone: " + geo.browser_timezone(geo.proxy_to_config(env_proxy)))
+
     logging.info("Test successful!")
 
 
