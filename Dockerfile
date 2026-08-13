@@ -58,8 +58,22 @@ RUN apt-get update \
     && playwright install-deps firefox \
     && mkdir -p /cache \
     && python -m invisible_playwright fetch \
+    # Bake the geoip database in rather than fetching 53 MB at the first solve.
+    # It is moved to a fixed path and pruned from its tag directory so the image
+    # carries one copy, not two. STEALTHFOX_GEOIP_MMDB below then pins it: the
+    # library otherwise re-checks for a newer build on every call and would
+    # re-download over the baked copy, which would make baking it pointless.
+    && python -c "import shutil; from pathlib import Path; from invisible_core.download import ensure_geoip_mmdb; src = ensure_geoip_mmdb(); shutil.move(str(src), '/cache/geoip.mmdb'); shutil.rmtree(src.parent, ignore_errors=True)" \
     && chmod -R o+rwX /cache \
     && rm -rf /var/lib/apt/lists/*
+
+# Pins the baked database, so resolving a timezone from the exit IP costs no
+# network round trip. The data ages with the image and refreshes on each
+# release, which is the right trade: a stale IP-to-country mapping shifts a
+# timezone at worst, and the engines treat a wrong zone as non-fatal anyway.
+# Belongs to invisible-core (18.13.0, held by the exact invisible-playwright
+# pin), so re-check this name when that pin moves.
+ENV STEALTHFOX_GEOIP_MMDB=/cache/geoip.mmdb
 
 USER flaresolverr
 

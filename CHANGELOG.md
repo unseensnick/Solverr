@@ -17,6 +17,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A URL that returns JSON now comes back as JSON, whichever engine solved it.** The stealth engine used to return the browser's built-in JSON viewer page instead of the payload, so the same request gave usable JSON through Chrome and markup through Camoufox.
 - **A solved response always reports the User-Agent that fetched it.** When the browser's user agent could not be read at startup, every response from that browser came back with an empty `userAgent`, which breaks reusing its cookies.
 
+### Other
+
+- The image ships the geolocation database used to work out the browser's timezone, instead of downloading it on the first solve. That adds about 120 MB to the image and removes a download from a fresh container's first request. The copy refreshes with each release.
+
 ## [1.2.2]
 
 ### Fixes
