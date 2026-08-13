@@ -4,9 +4,11 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.3.0]
+
 ### Additions
 
-- **Both engines now browse in the language you set with `LANG`.** Only Chrome read it before, so the two engines could serve the same site in different languages. The value is normalized to a language tag first: `en_US.UTF-8` reaches the browser as `en-US` instead of verbatim, and a value that isn't a language is ignored with a warning rather than passed through.
+- **`LANG` now sets the browser language on both engines.** Only Chrome read it before. The value is normalized to a language tag first, so `en_US.UTF-8` reaches the browser as `en-US` instead of verbatim, and a value that isn't a language is ignored with a warning rather than passed through.
 
 - **`BROWSER_TIMEZONE` pins the browser to a timezone.** Set it to an IANA zone like `Europe/Berlin` and both engines use it with no lookup, which is also how an offline deployment avoids the egress check. Left unset, the zone is derived from the exit IP as before.
 
