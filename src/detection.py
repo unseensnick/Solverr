@@ -41,6 +41,24 @@ TURNSTILE_SELECTORS = [
     "input[name='cf-turnstile-response']"
 ]
 
+# Markers for a full-page challenge specifically, used to tell one from a site's
+# own Turnstile widget when both carry the same token input. Deliberately a tight
+# subset of CHALLENGE_SELECTORS rather than the whole list: most of that list is
+# either shared with an embedded widget ('#turnstile-wrapper'), generic enough for
+# an ordinary page to match by accident ('.lds-ring' is a common CSS spinner,
+# 'div.vc div.text-box h2' is a shape), or present on solved pages (the
+# challenge-platform beacon). Matching one of those on a page that only holds a
+# widget would stop the filled token from ever counting as solved, which costs
+# the whole maxTimeout; missing a real interstitial only costs one fast retry on
+# the other engine, so this errs narrow.
+INTERSTITIAL_SELECTORS = [
+    # Cloudflare
+    '#challenge-form', '#challenge-stage', '#cf-challenge-running', '#cf-please-wait',
+    '#challenge-spinner',
+    # DDoS-GUARD
+    '#trk_jschal_js',
+]
+
 # Markers that identify an UNSOLVED Cloudflare challenge in returned HTML. Used
 # post-solve to tell whether an engine handed back a challenge page instead of
 # real content, so it must be precise: matching a marker forces a fallback or

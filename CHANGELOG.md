@@ -4,6 +4,18 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Fixes
+
+- **A solved page is no longer handed back while the challenge is still running.** Cloudflare briefly removes the challenge from the page between rounds, and that gap could be mistaken for the challenge being over, which returned the waiting page instead of the site. A solve now confirms the challenge is really gone, and waits for the page it was hiding to load. Solving takes about a second longer as a result.
+
+### Changes
+
+- **Sites that show a checkbox to click are more likely to clear on the Camoufox engine.** The checkbox could only be found when the site embedded the widget itself; on Cloudflare's own full-page challenge it was invisible to the solver, so those requests fell through to the other engine or ran out of time. It is now located a second way that works on both.
+
+### Other
+
+- Updated the stealth browser to invisible-playwright 0.7.2. Measured against the previous version over 18 challenge solves: same success rate, same timings.
+
 ## [1.3.0]
 
 ### Additions

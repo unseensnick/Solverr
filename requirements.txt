@@ -18,4 +18,4 @@ playwright-captcha==0.1.*
 # Pinned exactly: this package carries the patched Firefox (it pins
 # invisible-core in turn), so a bad bump breaks solving while the build stays
 # green. Published releases only, never the git head.
-invisible-playwright==0.6.1
+invisible-playwright==0.7.2
