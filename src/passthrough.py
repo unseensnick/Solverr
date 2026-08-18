@@ -187,42 +187,49 @@ class _Handler(BaseHTTPRequestHandler):
         logging.info("[pt %s] %s %s from %s -> solving %s",
                      rid, self.command, raw, self.address_string(), target)
         started = time.monotonic()
+        # Whatever happens below, this slot has to be released and the waiters
+        # woken. Leaving either undone strands every later request for this path:
+        # they would each wait the full timeout and then 502, for the life of the
+        # process, because the slot says a solve is still running.
         try:
-            status, body, content_type, solution = _solve(target)
-        except Exception as e:
+            try:
+                status, body, content_type, solution = _solve(target)
+            except Exception as e:
+                pending.error = e
+                logging.error("[pt %s] %s %s <- 502 after %.1fs: %s",
+                              rid, self.command, raw, time.monotonic() - started, e)
+                self._send(502, b"solver error")
+                return
+
+            # Don't pin a challenge page or a non-2xx for the whole TTL: a
+            # transient block would otherwise be served from cache long after it
+            # cleared. Both engines currently hardcode solution.status to 200, so
+            # today it is the challenge check that does the filtering; the status
+            # check is here for when an engine can report the real one.
+            cacheable = (
+                _CACHE_TTL > 0 and 200 <= status < 300
+                and not detection.looks_like_challenge_html(solution.response)
+            )
+            with _lock:
+                if cacheable:
+                    stored_at = time.monotonic()
+                    # Reading an entry only skips it once it expires, so drop the dead
+                    # ones here: every distinct path a client crawls would otherwise
+                    # pin its body (now possibly a whole file) for the process lifetime.
+                    for stale in [k for k, v in _cache.items() if v[0] <= stored_at]:
+                        del _cache[stale]
+                    _cache[raw] = (stored_at + _CACHE_TTL, status, body, content_type)
+            pending.status = status
+            pending.body = body
+            pending.content_type = content_type
+            logging.info("[pt %s] %s %s <- %d in %.1fs (%d bytes%s)",
+                         rid, self.command, raw, status, time.monotonic() - started,
+                         len(body), ", cached" if cacheable else "")
+            self._send(status, body, content_type)
+        finally:
             with _lock:
                 _inflight.pop(raw, None)
-            pending.error = e
             pending.event.set()
-            logging.error("[pt %s] %s %s <- 502 after %.1fs: %s",
-                          rid, self.command, raw, time.monotonic() - started, e)
-            self._send(502, b"solver error")
-            return
-
-        # Don't pin a challenge page or a non-2xx for the whole TTL: a transient
-        # block would otherwise be served from cache long after it cleared.
-        cacheable = (
-            _CACHE_TTL > 0 and 200 <= status < 300
-            and not detection.looks_like_challenge_html(solution.response)
-        )
-        with _lock:
-            _inflight.pop(raw, None)
-            if cacheable:
-                stored_at = time.monotonic()
-                # Reading an entry only skips it once it expires, so drop the dead
-                # ones here: every distinct path a client crawls would otherwise
-                # pin its body (now possibly a whole file) for the process lifetime.
-                for stale in [k for k, v in _cache.items() if v[0] <= stored_at]:
-                    del _cache[stale]
-                _cache[raw] = (stored_at + _CACHE_TTL, status, body, content_type)
-        pending.status = status
-        pending.body = body
-        pending.content_type = content_type
-        pending.event.set()
-        logging.info("[pt %s] %s %s <- %d in %.1fs (%d bytes%s)",
-                     rid, self.command, raw, status, time.monotonic() - started,
-                     len(body), ", cached" if cacheable else "")
-        self._send(status, body, content_type)
 
     def do_GET(self):
         self._handle()

@@ -8,13 +8,21 @@ discovery failure raises instead of degrading, which kills the launch outright
 neither, reporting the container's timezone and its own build's language, so
 the same request answered by the other engine changed both.
 
-Solverr resolves them here instead: one round trip per proxy, cached, never
-fatal, and the same pair goes to both engines. They travel together because
-the pairing is what a site checks, and the library says so itself: a language
-falling back to en-US while the timezone still resolves is the cross-field
-inconsistency the timezone check exists to catch. Handing the library concrete
-values also returns it before its own fatal branch, so a solve can no longer
-fail because an IP-echo endpoint was unreachable.
+Solverr resolves them here instead: once per proxy, cached, never fatal, and the
+same pair goes to both engines. They travel together because the pairing is what
+a site checks, and the library says so itself: a language falling back to en-US
+while the timezone still resolves is the cross-field inconsistency the timezone
+check exists to catch. Handing the library concrete values also returns it before
+its own fatal branch, so a solve can no longer fail because an IP-echo endpoint
+was unreachable.
+
+Behind a proxy that costs one egress lookup, because `prepare_session_geo`
+returns the exit IP it discovered and the language resolver reuses it. On a
+direct connection it costs two: the library only fills in `egress_ip` when a
+proxy is set (it is there for the WebRTC override, which only matters behind
+one), so it discards the IP it looked up and `resolve_session_locale` goes and
+finds it again. Both are cached here afterwards, so it is two round trips per
+process, not per request.
 """
 import logging
 import os
@@ -116,10 +124,12 @@ def accept_language(tag: str) -> str:
 def _resolved(proxy_config: Optional[dict]) -> tuple:
     """(timezone, language) for the exit IP, resolved once per proxy and cached.
 
-    Both come out of one round trip so they cannot disagree about the country,
-    which is the pairing that matters: the library's own comment notes that a
-    language falling back to en-US while the timezone resolves is exactly the
-    cross-field inconsistency the timezone check exists to catch.
+    Both are derived from the same exit IP so they cannot disagree about the
+    country, which is the pairing that matters: the library's own comment notes
+    that a language falling back to en-US while the timezone resolves is exactly
+    the cross-field inconsistency the timezone check exists to catch. Behind a
+    proxy that is one lookup; on a direct connection it is two (see the module
+    docstring), which is why this is cached rather than called per launch.
     """
     key = (proxy_config or {}).get("server") or ""
 
@@ -331,8 +341,10 @@ def _from_egress(proxy_config: Optional[dict]) -> tuple:
 
     zone, egress_ip = None, None
     try:
-        # One round trip: this returns the exit IP alongside the zone, and the
-        # language resolver reuses it rather than discovering its own.
+        # Behind a proxy this hands back the exit IP alongside the zone and the
+        # language resolver reuses it. Without one it reports no IP (the field
+        # exists for the WebRTC override), so the resolver below looks it up
+        # again; both answers are cached by the caller either way.
         session = prepare("", proxy_config)
         zone, egress_ip = (session.timezone or None), session.egress_ip
     except Exception as e:
