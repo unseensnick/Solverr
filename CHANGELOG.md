@@ -10,6 +10,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **A `request.post` to a URL containing a double quote now reaches that URL.** The quote ended the form's target early, so the request went to a truncated address and was sent as a GET instead of a POST, losing both the rest of the URL and the method.
 
+- **A busy session is no longer closed out from under the request using it.** The cleanup that closes idle browsers, and the one that enforces the session cap, both judged a session only by when it was last handed out. Under load, or with a short `SESSION_TTL_MINUTES`, either could close the browser mid-request and fail it with an error the caller could do nothing about.
+
 - **A session now browses through the proxy the request asked for.** A session named by a request before it existed, or rebuilt after its lifetime ran out, was created without one. Requests kept succeeding, so there was nothing to notice: they simply went out from the server's own address instead of through the proxy.
 
 ### Changes

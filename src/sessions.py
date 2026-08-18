@@ -16,6 +16,9 @@ class Session:
     driver: WebDriver
     created_at: datetime
     last_used: datetime = field(default=None)  # type: ignore[assignment]
+    # Requests currently solving on this driver. Guarded by SessionsStorage's
+    # lock, and read by the reaper so it never quits a browser mid-request.
+    in_use: int = 0
 
     def __post_init__(self):
         if self.last_used is None:
@@ -120,13 +123,26 @@ class SessionsStorage:
         if session is not None:
             session.last_used = datetime.now()
 
+    def begin_use(self, session: Session) -> None:
+        """Mark a session as solving, so the reaper leaves its browser alone."""
+        with self._lock:
+            session.in_use += 1
+
+    def end_use(self, session: Session) -> None:
+        with self._lock:
+            session.in_use = max(0, session.in_use - 1)
+
     def reap_idle(self, ttl: timedelta) -> List[str]:
         """Close and remove sessions idle longer than ``ttl``. Returns reaped ids."""
         if ttl is None or ttl.total_seconds() <= 0:
             return []
         now = datetime.now()
         with self._lock:
-            stale = [sid for sid, s in self.sessions.items() if (now - s.last_used) > ttl]
+            # A session solving right now is not idle, whatever its timestamp
+            # says: quitting the driver under it kills the request with an
+            # "invalid session id" that the caller cannot do anything about.
+            stale = [sid for sid, s in self.sessions.items()
+                     if (now - s.last_used) > ttl and not s.in_use]
             popped = [self.sessions.pop(sid) for sid in stale]
         for session in popped:
             self._teardown(session)
@@ -139,7 +155,10 @@ class SessionsStorage:
         with self._lock:
             if len(self.sessions) <= max_sessions:
                 return []
-            ordered = sorted(self.sessions.values(), key=lambda s: s.last_used)
+            # Never evict a session mid-solve, for the reason above. The cap is
+            # best-effort, so under full pressure this just evicts fewer.
+            ordered = sorted((s for s in self.sessions.values() if not s.in_use),
+                             key=lambda s: s.last_used)
             to_remove = ordered[: len(self.sessions) - max_sessions]
             for s in to_remove:
                 self.sessions.pop(s.session_id, None)
