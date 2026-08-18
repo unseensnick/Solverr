@@ -290,7 +290,15 @@ class StealthEngine(Engine):
         except Exception:
             logging.debug("stealth session teardown failed", exc_info=True)
 
-    def _get_session(self, session_id: str, ttl: Optional[timedelta]) -> Tuple[StealthContext, bool]:
+    def _get_session(self, session_id: str, ttl: Optional[timedelta],
+                     proxy: Optional[dict] = None) -> Tuple[StealthContext, bool]:
+        """The session's context, created with ``proxy`` if it isn't there yet.
+
+        The proxy has to reach create_session below. Without it a session that
+        outlives its TTL comes back on a direct connection, and one named by a
+        request before it exists is born that way, which is silent: the browser
+        still solves, just from the server's own address.
+        """
         fresh = False
         with self._sessions_lock:
             ctx = self._sessions.get(session_id)
@@ -302,7 +310,7 @@ class StealthEngine(Engine):
         for _ in range(2):
             if ctx is not None:
                 break
-            self.create_session(session_id)
+            self.create_session(session_id, proxy=proxy)
             fresh = True
             with self._sessions_lock:
                 ctx = self._sessions.get(session_id)
@@ -317,7 +325,7 @@ class StealthEngine(Engine):
         own_ctx = False
         if req.session:
             ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
-            ctx, _ = self._get_session(req.session, ttl)
+            ctx, _ = self._get_session(req.session, ttl, req.proxy)
         else:
             ctx = StealthContext(geo.proxy_to_config(req.proxy))
             # Owned before start(): a launch that fails or times out has usually

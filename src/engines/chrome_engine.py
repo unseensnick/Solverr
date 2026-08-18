@@ -45,7 +45,7 @@ class ChromeEngine(Engine):
             if req.session:
                 session_id = req.session
                 ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
-                session, fresh = self._sessions.get(session_id, ttl)
+                session, fresh = self._sessions.get(session_id, ttl, req.proxy)
 
                 if fresh:
                     logging.debug(f"new session created to perform the request (session_id={session_id})")

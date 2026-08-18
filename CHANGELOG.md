@@ -8,6 +8,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **A solved page is no longer handed back while the challenge is still running.** Cloudflare briefly removes the challenge from the page between rounds, and that gap could be mistaken for the challenge being over, which returned the waiting page instead of the site. A solve now confirms the challenge is really gone, and waits for the page it was hiding to load. Solving takes about a second longer as a result.
 
+- **A session now browses through the proxy the request asked for.** A session named by a request before it existed, or rebuilt after its lifetime ran out, was created without one. Requests kept succeeding, so there was nothing to notice: they simply went out from the server's own address instead of through the proxy.
+
 ### Changes
 
 - **Sites that show a checkbox to click are more likely to clear on the Camoufox engine.** The checkbox could only be found when the site embedded the widget itself; on Cloudflare's own full-page challenge it was invisible to the solver, so those requests fell through to the other engine or ran out of time. It is now located a second way that works on both.

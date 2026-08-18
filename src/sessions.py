@@ -96,12 +96,20 @@ class SessionsStorage:
         self._teardown(session)
         return True
 
-    def get(self, session_id: str, ttl: Optional[timedelta] = None) -> Tuple[Session, bool]:
-        session, fresh = self.create(session_id)
+    def get(self, session_id: str, ttl: Optional[timedelta] = None,
+            proxy: Optional[dict] = None) -> Tuple[Session, bool]:
+        """Return the session, creating it with ``proxy`` if it isn't there yet.
+
+        The proxy has to reach both create calls below. Without it a session that
+        outlives its TTL comes back on a direct connection, and one named by a
+        request before it exists is born that way, which is silent: the browser
+        still solves, just from the server's own address.
+        """
+        session, fresh = self.create(session_id, proxy)
 
         if ttl is not None and not fresh and session.lifetime() > ttl:
             logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
-            session, fresh = self.create(session_id, force_new=True)
+            session, fresh = self.create(session_id, proxy, force_new=True)
 
         session.last_used = datetime.now()
         return session, fresh
