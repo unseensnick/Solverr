@@ -151,8 +151,14 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
         options.add_argument('--disable-gpu-sandbox')
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--ignore-ssl-errors')
-    # disable breaking popup
-    options.add_argument("--disable-features=LocalNetworkAccessChecks")
+    # Collected and passed once, at the end. Chrome keeps switches in a map, so a
+    # second --disable-features replaces the first rather than adding to it, and
+    # the popup fix below was being dropped whenever an authenticated proxy added
+    # its own.
+    disabled_features = [
+        # disable breaking popup
+        "LocalNetworkAccessChecks",
+    ]
 
     # Always set, and shared with the stealth engine, so one request does not
     # change language depending on which engine answered it. Sent as the
@@ -168,12 +174,14 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     proxy_extension_dir = None
     if proxy and all(key in proxy for key in ['url', 'username', 'password']):
         proxy_extension_dir = create_proxy_extension(proxy)
-        options.add_argument("--disable-features=DisableLoadExtensionCommandLineSwitch")
+        disabled_features.append("DisableLoadExtensionCommandLineSwitch")
         options.add_argument("--load-extension=%s" % os.path.abspath(proxy_extension_dir))
     elif proxy and 'url' in proxy:
         proxy_url = proxy['url']
         logging.debug("Using webdriver proxy: %s", proxy_url)
         options.add_argument('--proxy-server=%s' % proxy_url)
+
+    options.add_argument('--disable-features=%s' % ','.join(disabled_features))
 
     # note: headless mode is detected (headless = True)
     # we launch the browser in head-full mode with the window hidden
@@ -324,8 +332,11 @@ def get_user_agent(driver=None) -> str:
     if USER_AGENT is not None:
         return USER_AGENT
 
+    # Only a browser launched here is closed here. Quitting a caller's driver
+    # would end the request that lent it, or the session it belongs to.
+    own_driver = driver is None
     try:
-        if driver is None:
+        if own_driver:
             driver = get_webdriver()
         USER_AGENT = driver.execute_script("return navigator.userAgent")
         # Fix for Chrome 117 | https://github.com/FlareSolverr/FlareSolverr/issues/910
@@ -334,7 +345,7 @@ def get_user_agent(driver=None) -> str:
     except Exception as e:
         raise Exception("Error getting browser User-Agent. " + str(e))
     finally:
-        if driver is not None:
+        if own_driver and driver is not None:
             if PLATFORM_VERSION == "nt":
                 driver.close()
             driver.quit()
