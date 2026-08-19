@@ -232,6 +232,10 @@ def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
     })
 
 
+# Below this, a fallback engine cannot launch a browser and reach a page, so
+# spending what is left only replaces the first engine's error with a timeout.
+_MIN_ENGINE_SECONDS = 5.0
+
 # Per-domain memory of which engine last cleared a host, so a host that only the
 # stealth engine can solve skips the failing Chrome attempt on later requests.
 _DOMAIN_ENGINE = {}
@@ -372,15 +376,43 @@ def _looks_challenged(result: SolveResult) -> bool:
 
 
 def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
+    """Solve ``req``, trying each planned engine within one shared budget.
+
+    ``maxTimeout`` is how long the caller is willing to wait for an answer, so it
+    covers the whole request rather than each engine in turn. Handing the full
+    value to every engine made a two-engine fallback take up to twice as long as
+    asked, which is long enough to trip the caller's own timeout while Solverr
+    still believed it was inside the budget.
+
+    Each engine gets an even share of what is left rather than all of it, because
+    a first engine that runs its budget out leaves nothing for the fallback.
+    Measured on a host only Chrome can clear: with the whole budget, the stealth
+    engine spent all 120s and Chrome never ran, turning a request that used to
+    succeed into a failure. An even share also costs nothing when the first
+    engine is quick, since the fallback then inherits almost all of the budget.
+    """
     timeout = int(req.maxTimeout) / 1000
+    deadline = time.monotonic() + timeout
     order, _can_fallback = _engine_plan(req)
     host = _host_of(req)
 
     last_error = None
+    # A result an engine did return, that only looked unsolved. Kept so running
+    # out of budget hands it back rather than turning it into an error.
+    last_result = None
     for i, engine in enumerate(order):
+        remaining = deadline - time.monotonic()
+        if i > 0 and remaining < _MIN_ENGINE_SECONDS:
+            # Too little left for another browser to launch and navigate. Stop
+            # here so the caller gets the reason the previous engine failed,
+            # instead of a timeout this one was always going to hit.
+            logging.info("Budget spent after engine '%s'; not trying '%s' with %.1fs left",
+                         order[i - 1].name, engine.name, remaining)
+            break
         is_last = i == len(order) - 1
+        share = remaining if is_last else remaining / (len(order) - i)
         try:
-            result = engine.solve(req, method, timeout)
+            result = engine.solve(req, method, share)
         except Exception as e:
             last_error = e
             if is_last:
@@ -391,6 +423,7 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
 
         if not is_last and _looks_challenged(result):
             last_error = Exception(f"Engine '{engine.name}' returned an unsolved challenge page")
+            last_result = result
             logging.info("Engine '%s' returned an unsolved challenge page; falling back to '%s'...",
                          engine.name, order[i + 1].name)
             continue
@@ -399,6 +432,12 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
         logging.info("Solved %s with engine '%s'", host or req.url, engine.name)
         return _to_challenge_resolution(result)
 
+    if last_result is not None:
+        # No engine left to try, so hand back the page the last one did return.
+        # That is what would have happened had it been last in the plan, and the
+        # caller can judge the challenge page for itself.
+        logging.info("No engine left to try; returning the last page received")
+        return _to_challenge_resolution(last_result)
     raise last_error or Exception("All engines failed to solve the challenge.")
 
 
