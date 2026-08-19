@@ -6,15 +6,9 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ### Changes
 
-- **Prometheus metrics now report at most 100 distinct domains, and every host past that as `other`.** Prometheus keeps one time series per label value for as long as the process runs and nothing evicted them, so pointing Solverr at many hosts grew the registry and the exported payload without limit. Only affects deployments running with `PROMETHEUS_ENABLED=true`.
-
-### Changes
-
 - **A request's `maxTimeout` is now capped at 180000 ms, raised with `MAX_TIMEOUT_MS`.** Nothing bounded it above, so a single request could hold a browser for as long as the caller asked, and because the session it was using counted as busy the whole time, the reaper could not reclaim that browser either. A larger value is clamped with a warning rather than refused, so callers already asking for more keep working.
-
-### Changes
-
-- **The passthrough cache now holds at most 256 MB, set with `PASSTHROUGH_CACHE_MAX_BYTES`.** It expired bodies on age but never limited how many it held at once, so a client working through many pages inside one cache window could pin all of them in memory, and large non-HTML documents counted for far more than pages do. Entries closest to expiry are evicted first, and a body over a quarter of the ceiling is served without being cached.
+- **The passthrough cache now holds at most 256 MB, set with `PASSTHROUGH_CACHE_MAX_BYTES`, and never caches a body larger than a quarter of that.** It expired bodies on age but never limited how many it held at once, so a client working through many pages inside one cache window could pin all of them in memory, and large non-HTML documents counted for far more than pages do. Entries closest to expiry are evicted first. Lower the ceiling far enough and ordinary pages stop being cached at all, which is the quarter rule doing its job rather than caching being broken.
+- **Prometheus metrics, when enabled, now report at most 100 distinct domains, and every host past that as `other`.** Prometheus keeps one time series per label value for as long as the process runs and nothing evicted them, so pointing Solverr at many hosts grew the registry and the exported payload without limit. The exporter is off unless `PROMETHEUS_ENABLED=true`.
 
 ## [1.4.0]
 

@@ -78,6 +78,12 @@ There are two chains and picking the wrong one makes the gate meaningless. Solve
 
 A gate on a bound also needs the bound set small enough to reach in a short run, sized against a measured response rather than a guessed one. A production-sized default is never hit in five requests, and the pass looks identical either way.
 
+## After several land: tidy the changelog
+
+Each worker branches from `main` and adds its CHANGELOG bullet under a category heading. Branches cut before their siblings merged each create their own heading, and git merges them cleanly as separate blocks, so three merged PRs leave three `### Changes` headings stacked under `## [Unreleased]`. Nothing warns about it: it is not a conflict, and the pre-commit lint checks entry format rather than section structure.
+
+The worker cannot prevent this, since it cannot see branches that have not merged yet. Fold the duplicate headings into one on `main` after a batch lands, before the next release cut. Ordering the bullets by audience size (everyone, then one subsystem's users, then an opt-in feature's) reads better than merge order.
+
 ## Labels
 
 | Label | Set by | Meaning |
