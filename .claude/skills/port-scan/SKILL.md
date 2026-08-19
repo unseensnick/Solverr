@@ -43,11 +43,13 @@ If a range comes back empty for an upstream, say so and skip it. An empty Byparr
 Three sources, all of them binding:
 
 1. **`docs/dev/upstream-sync.md`**, the ledger. The "Audited through" table gives the range start. The "Deliberately different" list is the standing set of refusals: **an upstream commit that re-litigates one of those is not an issue**, it is already answered. The per-audit notes also record "not applicable" verdicts by SHA; do not re-file those either.
-2. **Open issues already filed**, so a repeat scan is idempotent:
+2. **Issues already filed**, open and closed, so a repeat scan is idempotent:
    ```
-   gh issue list -R unseensnick/Solverr --state all --label loop:ready --label loop:needs-human --label loop:in-review --limit 100 --json number,title,state
+   gh issue list -R unseensnick/Solverr --state all --label source:upstream --limit 100 --json number,title,state
    ```
-   Every issue this skill files carries its upstream SHA in the title, which is what makes the dedupe reliable. A commit with an issue already open, or with a closed issue, is done.
+   Dedupe on `source:upstream`, the one label every issue from this skill carries, so the query catches them in any `loop:` state. **Do not list the `loop:` labels instead: repeated `--label` flags are ANDed, not ORed**, so asking for `loop:ready` and `loop:needs-human` and `loop:in-review` together matches nothing and every commit looks unfiled. Verified against this repo, where that form returned 0 while three matching issues existed.
+
+   Every issue this skill files carries its upstream SHA in the title, which is what makes matching a commit reliable. A commit with an issue already open, or with a closed issue, is done.
 3. **`Handoff.md`** if present, for recorded dead ends. Something listed under "What failed" is not eligible, whatever upstream did with it.
 
 ## Step 3: Classify each commit

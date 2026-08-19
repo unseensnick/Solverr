@@ -116,15 +116,16 @@ The verdict is a tally, never a single result:
 
 Never report a live result as pass or fail without the trial count behind it.
 
-### Gate C, the indexer chain
+### Gate C, the consuming chain
 
-The chain is the thing that actually consumes Solverr, so it gets exercised. Everything here is throwaway and isolated:
+The chain is what actually uses Solverr, so it gets exercised. **There are two of them and they are different code paths. Pick the one the change is in, or the gate proves nothing.**
 
-- A private network, plus a fresh Prowlarr and a fresh `byparr-proxy` built from `../byparr-proxy`, both named with the `-loop<N>` suffix. Prowlarr on 9796 and the proxy on 8988, never 9696 or 8888.
-- Point the proxy's `BYPARR` at the run's own container (`http://solverr-loop<N>:8191/v1`) on that private network.
-- Import the definition from `../byparr-proxy/definitions/`, run **one** search, and assert results came back.
+- **Solverr's own passthrough** (`src/passthrough.py`, port 8888) when the change touches the passthrough or its config. Run the container with `PASSTHROUGH_ENABLED=true`, `PASSTHROUGH_ALLOWED_HOSTS` set, and drive it directly on 8988. `byparr-proxy` is **not** in this path: it fronts `/v1`, so putting it in front would exercise code the change never touches.
+- **`byparr-proxy` in front of `/v1`** for everything else, since that is how the deployed stack runs. A fresh proxy built from `../byparr-proxy` on 8988, its `BYPARR` pointed at the run's own container (`http://solverr-loop<N>:8191/v1`) over a private network.
 
-One search, not a sweep. Prowlarr gives a request about 100 seconds and then disables the indexer, so a slow solve reads as a broken indexer. On a throwaway instance that costs nothing, which is why the owner's own Prowlarr is never used here. Report the elapsed time next to the result count; a search that succeeds at 95 seconds is a finding.
+Either way, add a throwaway Prowlarr on 9796 when the change could affect what an indexer sees, import the definition from `../byparr-proxy/definitions/`, and run **one** search. Never 9696 or 8888, and never the owner's own Prowlarr: it gives a request about 100 seconds and then disables the indexer, so a slow solve reads as a broken indexer. On a throwaway instance that costs nothing. Report elapsed time next to the result count; a search that succeeds at 95 seconds is a finding.
+
+**When the change is a bound (a cache cap, a pool size, a limit), set it small enough that the boundary is reachable in a short run.** A production-sized default is never hit in five requests, so the gate would pass without touching the new code at all. Size it against a **measured** body rather than a guess: measure one real response first, then choose a bound that both admits it and is exceeded by a handful of them. Getting this wrong is not obvious, it just looks like a clean pass.
 
 ## Step 7: Review
 

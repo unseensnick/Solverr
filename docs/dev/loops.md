@@ -72,7 +72,11 @@ Cheapest first, so a run fails fast.
 
 **Gate B, the live solve tally.** The one gate that cannot be boolean. Cloudflare's behavior varies with IP reputation, time of day, and how hard a host was hit five minutes ago, so a single result carries no information either way. The worker builds a baseline container off `origin/main` and runs it interleaved with the change, trial for trial, in the same window. Within noise is a pass, clearly worse is a fail, and an ambiguous window opens the PR labeled `needs-live-recheck` with the raw numbers. Asking a person is a valid outcome; a confident verdict off one sample is not.
 
-**Gate C, the indexer chain.** A throwaway Prowlarr and `byparr-proxy` on a private network, on non-default ports, running one search. Prowlarr disables an indexer after about 100 seconds, so a slow solve reads as a broken indexer; on a throwaway instance that costs nothing.
+**Gate C, the consuming chain.** Throwaway containers on a private network, on non-default ports, running one search. Prowlarr disables an indexer after about 100 seconds, so a slow solve reads as a broken indexer; on a throwaway instance that costs nothing.
+
+There are two chains and picking the wrong one makes the gate meaningless. Solverr's own passthrough (`src/passthrough.py`) and `byparr-proxy` are separate implementations of the same idea, and `byparr-proxy` fronts `/v1`, so it never runs a line of the passthrough. A change to one is proved by driving that one. This bit on the first real run: the gate as originally written would have passed a passthrough change without executing any of it.
+
+A gate on a bound also needs the bound set small enough to reach in a short run, sized against a measured response rather than a guessed one. A production-sized default is never hit in five requests, and the pass looks identical either way.
 
 ## Labels
 
@@ -84,6 +88,8 @@ Cheapest first, so a run fails fast.
 | `source:upstream` | `/port-scan` | Came from an upstream commit. |
 | `source:audit` | `/audit-scan` | Came from a verified defect here. |
 | `needs-live-recheck` | worker | Gate B was ambiguous. Re-run the tally before merging. |
+
+Dedupe on the `source:` labels, never on the `loop:` ones. Repeated `--label` flags in `gh` are ANDed, so listing several `loop:` states at once matches nothing, and a manager reading that as "nothing filed yet" re-files everything on every run. `loop:in-review` also stays on an issue after its PR merges, as a record of how it was handled; nothing reads it once the issue is closed.
 
 ## Tripwire zones
 
