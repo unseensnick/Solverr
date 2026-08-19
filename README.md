@@ -408,6 +408,8 @@ Rough guide to expected latency: Chrome solves take a few seconds; Camoufox solv
 
 Disabled by default. Enable with `PROMETHEUS_ENABLED=true` and expose `PROMETHEUS_PORT` (default 8192). Metrics include per-domain request counts, results, and duration histograms.
 
+The domain label is capped at 100 distinct hosts; every host after that is reported as `other`. Prometheus keeps a time series per label value for the life of the process, so an uncapped label would grow the registry with the number of hosts requested. A deployer pointing Solverr at a handful of sites never reaches the cap.
+
 ## Troubleshooting
 
 **A source shows no results but the log says `Challenge not detected!` with a 200.** An engine loaded the page but couldn't recognise a newer managed/Turnstile challenge and returned it as if solved. Solverr's auto-fallback is designed to catch this and retry on the other engine; make sure `ENGINE_FALLBACK` is on and the stealth engine is enabled. If it still fails, the site is likely gating on your IP — add a residential proxy.

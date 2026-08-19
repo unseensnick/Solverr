@@ -6,6 +6,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ### Changes
 
+- **Prometheus metrics now report at most 100 distinct domains, and every host past that as `other`.** Prometheus keeps one time series per label value for as long as the process runs and nothing evicted them, so pointing Solverr at many hosts grew the registry and the exported payload without limit. Only affects deployments running with `PROMETHEUS_ENABLED=true`.
+
+### Changes
+
 - **A request's `maxTimeout` is now capped at 180000 ms, raised with `MAX_TIMEOUT_MS`.** Nothing bounded it above, so a single request could hold a browser for as long as the caller asked, and because the session it was using counted as busy the whole time, the reaper could not reclaim that browser either. A larger value is clamped with a warning rather than refused, so callers already asking for more keep working.
 
 ### Changes
