@@ -4,6 +4,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Changes
+
+- **The passthrough cache now holds at most 256 MB, set with `PASSTHROUGH_CACHE_MAX_BYTES`.** It expired bodies on age but never limited how many it held at once, so a client working through many pages inside one cache window could pin all of them in memory, and large non-HTML documents counted for far more than pages do. Entries closest to expiry are evicted first, and a body over a quarter of the ceiling is served without being cached.
+
 ## [1.4.0]
 
 ### Fixes

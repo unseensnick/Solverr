@@ -41,11 +41,18 @@ _SKIP_EXT = re.compile(
 _ALLOWED_HOSTS = set()
 _DEFAULT_HOST = None
 _CACHE_TTL = 0
+_CACHE_MAX_BYTES = 0
 _TIMEOUT_MS = 120000
+
+# One body may occupy at most this share of the cap. Without it a single large
+# document evicts most of the cache to make room for itself, which is worse than
+# not caching it at all.
+_MAX_BODY_SHARE = 0.25
 
 _HTML_CONTENT_TYPE = "text/html; charset=utf-8"
 
 _cache = {}       # request path -> (expires_monotonic, status, body_bytes, content_type)
+_cache_bytes = 0  # running total of the body bytes in _cache, guarded by _lock
 _inflight = {}    # request path -> _Pending
 _lock = threading.Lock()
 
@@ -111,6 +118,60 @@ def _solve(target: str):
     if getattr(res.solution, 'contentType', None) == "application/pdf":
         return status, base64.b64decode(raw), "application/pdf", res.solution
     return status, raw.encode("utf-8", errors="replace"), _HTML_CONTENT_TYPE, res.solution
+
+
+def reset_cache() -> None:
+    """Drop every cached body. Exists for tests; the server never needs it."""
+    global _cache_bytes
+    with _lock:
+        _cache.clear()
+        _cache_bytes = 0
+
+
+def _cache_store(raw: str, status: int, body: bytes, content_type: str) -> bool:
+    """Cache `body` under `raw`, evicting as needed to stay under the byte cap.
+
+    Returns whether it was stored, which is not the same as whether it was
+    eligible: a body over the per-body ceiling is refused outright.
+
+    Age alone used to bound this. Expired entries were pruned so nothing
+    outlived its TTL, but nothing capped how much could accumulate inside one
+    TTL window, so a client walking pagination for an hour pinned every distinct
+    body for that hour. Non-HTML documents are held as decoded bytes, which is
+    what makes the total worth measuring in bytes rather than entries.
+    """
+    global _cache_bytes
+    size = len(body)
+    if 0 < _CACHE_MAX_BYTES < size / _MAX_BODY_SHARE:
+        logging.debug("[pt] %s not cached: %d bytes is over the per-body ceiling", raw, size)
+        return False
+
+    with _lock:
+        stored_at = time.monotonic()
+        # Reading an entry only skips it once it expires, so drop the dead ones
+        # here: every distinct path a client crawls would otherwise pin its body
+        # for the process lifetime.
+        for stale in [k for k, v in _cache.items() if v[0] <= stored_at]:
+            _drop(stale)
+        # Re-storing a path replaces it, so its old bytes leave the total first.
+        _drop(raw)
+        if _CACHE_MAX_BYTES > 0:
+            # Soonest-expiring first, so eviction takes what was going to go anyway.
+            for key in sorted(_cache, key=lambda k: _cache[k][0]):
+                if _cache_bytes + size <= _CACHE_MAX_BYTES:
+                    break
+                _drop(key)
+        _cache[raw] = (stored_at + _CACHE_TTL, status, body, content_type)
+        _cache_bytes += size
+    return True
+
+
+def _drop(key: str) -> None:
+    """Remove one entry and its bytes from the total. Caller holds ``_lock``."""
+    global _cache_bytes
+    entry = _cache.pop(key, None)
+    if entry is not None:
+        _cache_bytes -= len(entry[2])
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -210,21 +271,15 @@ class _Handler(BaseHTTPRequestHandler):
                 _CACHE_TTL > 0 and 200 <= status < 300
                 and not detection.looks_like_challenge_html(solution.response)
             )
-            with _lock:
-                if cacheable:
-                    stored_at = time.monotonic()
-                    # Reading an entry only skips it once it expires, so drop the dead
-                    # ones here: every distinct path a client crawls would otherwise
-                    # pin its body (now possibly a whole file) for the process lifetime.
-                    for stale in [k for k, v in _cache.items() if v[0] <= stored_at]:
-                        del _cache[stale]
-                    _cache[raw] = (stored_at + _CACHE_TTL, status, body, content_type)
+            # Eligible is not the same as stored: the byte cap can still refuse it,
+            # so the log below reports what actually happened.
+            cached = cacheable and _cache_store(raw, status, body, content_type)
             pending.status = status
             pending.body = body
             pending.content_type = content_type
             logging.info("[pt %s] %s %s <- %d in %.1fs (%d bytes%s)",
                          rid, self.command, raw, status, time.monotonic() - started,
-                         len(body), ", cached" if cacheable else "")
+                         len(body), ", cached" if cached else "")
             self._send(status, body, content_type)
         finally:
             with _lock:
@@ -247,12 +302,13 @@ def start():
     if not config.passthrough_enabled():
         return
 
-    global _ALLOWED_HOSTS, _DEFAULT_HOST, _CACHE_TTL, _TIMEOUT_MS
+    global _ALLOWED_HOSTS, _DEFAULT_HOST, _CACHE_TTL, _CACHE_MAX_BYTES, _TIMEOUT_MS
     hosts = config.passthrough_allowed_hosts()
     _ALLOWED_HOSTS = set(hosts)
     # First allow-listed host is the mirror used for site-internal absolute links.
     _DEFAULT_HOST = hosts[0] if hosts else None
     _CACHE_TTL = config.passthrough_cache_ttl()
+    _CACHE_MAX_BYTES = config.passthrough_cache_max_bytes()
     _TIMEOUT_MS = config.passthrough_timeout_ms()
     port = config.passthrough_port()
 
@@ -261,7 +317,15 @@ def start():
         logging.info("  allowed hosts: %s (default: %s)", ", ".join(hosts), _DEFAULT_HOST)
     else:
         logging.warning("  PASSTHROUGH_ALLOWED_HOSTS is empty; every request is refused (403)")
-    logging.info("  cache ttl: %ds, request timeout: %dms", _CACHE_TTL, _TIMEOUT_MS)
+    if _CACHE_MAX_BYTES <= 0:
+        cap = "unbounded"
+    elif _CACHE_MAX_BYTES >= 1024 * 1024:
+        cap = f"{_CACHE_MAX_BYTES // (1024 * 1024)} MB"
+    else:
+        # Reporting a sub-megabyte cap in whole MB rounds it to "0 MB", which
+        # reads as caching being off rather than tight.
+        cap = f"{_CACHE_MAX_BYTES} bytes"
+    logging.info("  cache ttl: %ds (max %s), request timeout: %dms", _CACHE_TTL, cap, _TIMEOUT_MS)
 
     server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True, name="passthrough").start()
