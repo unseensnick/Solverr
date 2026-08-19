@@ -4,6 +4,38 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.4.0]
+
+### Fixes
+
+- **A solved page is no longer handed back while the challenge is still running.** Cloudflare briefly removes the challenge from the page between rounds, and that gap could be mistaken for the challenge being over, which returned the waiting page instead of the site. A solve now confirms the challenge is really gone, and waits for the page it was hiding to load. Solving takes about a second longer as a result.
+
+- **A `request.post` to a URL containing a double quote now reaches that URL.** The quote ended the form's target early, so the request went to a truncated address and was sent as a GET instead of a POST, losing both the rest of the URL and the method.
+
+- **The passthrough now answers before an indexer app gives up on it.** `PASSTHROUGH_TIMEOUT_MS` drops from 120000 to 90000, under the roughly 100 seconds those apps wait. A solve that outlived that was recorded as an indexer failure and put the indexer into backoff, so one slow page disabled it for everything until the backoff cleared. Set the variable if you want the old value.
+
+- **`maxTimeout` now covers the whole request, not each engine in turn.** When a request fell back to the other engine, that engine started a fresh full timeout, so a 60 second request could take 120. Measured against an unreachable host: 44.4 seconds for a 20 second request before, 21.6 after. Clients that set their own timeout, like the *arr apps, were hitting it while Solverr still thought it was inside the budget. With fallback on, each engine gets an even share of what is left, so raise `maxTimeout` if a site needs a long solve on a single engine.
+
+- **A misspelled `engine` is refused instead of being answered by the default engine.** `engine: "stelth"` used to fall through and solve on whichever engine was primary, so a client that meant to pin one never found out it hadn't. The accepted values are `chrome`, `stealth`, and `auto`.
+
+- **`session_ttl_minutes` has to be a positive number of minutes.** A negative value made every session compare as already expired, so the browser was rebuilt on every request and sessions quietly stopped being sessions.
+
+- **A `url` has to start with `http://` or `https://` exactly.** `" https://example-site.tld"` and `"https:/example-site.tld"` were accepted and left to the browser to sort out; both are now refused at the door, like every other scheme.
+
+- **Chrome keeps its popup fix when a proxy with a username and password is set.** The two browser flags involved were passed separately and the second replaced the first, so configuring an authenticated proxy silently switched the other one off.
+
+- **A busy session is no longer closed out from under the request using it.** The cleanup that closes idle browsers, and the one that enforces the session cap, both judged a session only by when it was last handed out. Under load, or with a short `SESSION_TTL_MINUTES`, either could close the browser mid-request and fail it with an error the caller could do nothing about.
+
+- **A session now browses through the proxy the request asked for.** A session named by a request before it existed, or rebuilt after its lifetime ran out, was created without one. Requests kept succeeding, so there was nothing to notice: they simply went out from the server's own address instead of through the proxy.
+
+### Changes
+
+- **Sites that show a checkbox to click are more likely to clear on the Camoufox engine.** The checkbox could only be found when the site embedded the widget itself; on Cloudflare's own full-page challenge it was invisible to the solver, so those requests fell through to the other engine or ran out of time. It is now located a second way that works on both.
+
+### Other
+
+- Updated the stealth browser to invisible-playwright 0.7.2. Measured against the previous version over 18 challenge solves: same success rate, same timings.
+
 ## [1.3.0]
 
 ### Additions

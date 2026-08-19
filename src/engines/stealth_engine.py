@@ -24,7 +24,8 @@ import geo
 import utils
 from async_runtime import get_runtime
 from detection import (ACCESS_DENIED_TITLES, ACCESS_DENIED_SELECTORS,
-                       CHALLENGE_TITLES, CHALLENGE_SELECTORS, TURNSTILE_SELECTORS)
+                       CHALLENGE_TITLES, CHALLENGE_SELECTORS,
+                       INTERSTITIAL_SELECTORS, TURNSTILE_SELECTORS)
 from dtos import V1RequestBase
 from engines.base import Engine, SolveResult
 from postform import build_post_html
@@ -40,9 +41,36 @@ _MAX_PDF_BYTES = 32 * 1024 * 1024
 # The Turnstile widget renders in an iframe served from this host, and its
 # checkbox sits at the left edge, vertically centered, in the standard 300x65
 # layout. Measured against the live widget: a click there flips it to "Success!".
+# The same inset serves either rect: measured against the live widget, its
+# container shares the iframe's x and width and is 7px taller.
 _TURNSTILE_FRAME_HOST = "challenges.cloudflare.com"
 _TURNSTILE_CHECKBOX_X = 30
-_TURNSTILE_RECLICK_SECONDS = 6
+
+# Ancestors of the Turnstile input to try when the widget's own iframe cannot be
+# measured, nearest first, with the box guards that tell a checkbox row from a
+# full-page wrapper. Ported from Byparr (ThePhaseless/Byparr#400), which measured
+# these depths against live interstitials.
+_WIDGET_ANCESTOR_DEPTHS = (1, 2, 3, 4)
+_WIDGET_MIN_WIDTH = 40
+_WIDGET_MIN_HEIGHT = 20
+_WIDGET_MAX_HEIGHT = 120
+
+# Reads against a challenge page are bounded well under the request budget:
+# Playwright's own default is 30 seconds, which would spend the whole solve
+# waiting for one element that a later pass would have found anyway.
+_ELEMENT_READ_MS = 1000
+_WIDGET_READ_SECONDS = 5
+
+# Verifying takes a few seconds after a press, and pressing again over the top
+# of it restarts the verification, so a landed press earns a cooldown while a
+# press that found nothing to hit may retry on the next pass.
+_CLICK_COOLDOWN_SECONDS = 4
+_POLL_SECONDS = 1.5
+
+# Cloudflare drops the challenge markup while it issues the next round, so a
+# single clear reading does not mean the challenge is over. Look again after
+# this long before believing it.
+_CHALLENGE_CONFIRM_SECONDS = 1.0
 
 # playwright-captcha logs each failed click attempt at ERROR, which is expected
 # and harmless for non-interactive interstitials (no checkbox to click). We handle
@@ -262,19 +290,33 @@ class StealthEngine(Engine):
         except Exception:
             logging.debug("stealth session teardown failed", exc_info=True)
 
-    def _get_session(self, session_id: str, ttl: Optional[timedelta]) -> Tuple[StealthContext, bool]:
+    def _get_session(self, session_id: str, ttl: Optional[timedelta],
+                     proxy: Optional[dict] = None) -> Tuple[StealthContext, bool]:
+        """The session's context, created with ``proxy`` if it isn't there yet.
+
+        The proxy has to reach create_session below. Without it a session that
+        outlives its TTL comes back on a direct connection, and one named by a
+        request before it exists is born that way, which is silent: the browser
+        still solves, just from the server's own address.
+        """
         fresh = False
         with self._sessions_lock:
             ctx = self._sessions.get(session_id)
         if ctx is not None and ttl is not None and ctx.lifetime() > ttl:
-            logging.debug(f"stealth session expired, recreating (session_id={session_id})")
-            self.destroy_session(session_id)
-            ctx = None
+            if ctx.lock.locked():
+                # Recreating closes the browser, and a request is solving on it
+                # right now. Reuse it here; whoever finds it idle recreates it.
+                logging.debug(f"stealth session expired but a request is still on it, "
+                              f"so it is reused (session_id={session_id})")
+            else:
+                logging.debug(f"stealth session expired, recreating (session_id={session_id})")
+                self.destroy_session(session_id)
+                ctx = None
         # (Re)create, tolerating a reaper/cap eviction racing between calls.
         for _ in range(2):
             if ctx is not None:
                 break
-            self.create_session(session_id)
+            self.create_session(session_id, proxy=proxy)
             fresh = True
             with self._sessions_lock:
                 ctx = self._sessions.get(session_id)
@@ -289,7 +331,7 @@ class StealthEngine(Engine):
         own_ctx = False
         if req.session:
             ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
-            ctx, _ = self._get_session(req.session, ttl)
+            ctx, _ = self._get_session(req.session, ttl, req.proxy)
         else:
             ctx = StealthContext(geo.proxy_to_config(req.proxy))
             # Owned before start(): a launch that fails or times out has usually
@@ -448,12 +490,16 @@ class StealthEngine(Engine):
 
                 if not solved:
                     raise Exception("Challenge still present after solving attempts")
-                # Let the post-challenge redirect to the real page settle before we
-                # read the content.
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=_NETWORKIDLE_MS)
-                except Exception:
-                    logging.debug("post-solve settle timed out")
+                # Let the post-challenge navigation to the real page settle before
+                # we read the content. Both states, because the destination is a
+                # separate document that the interstitial only submits for once its
+                # markup is gone: waiting for domcontentloaded alone returns at once
+                # whenever the challenge page itself is still the current document.
+                for state in ("domcontentloaded", "networkidle"):
+                    try:
+                        await page.wait_for_load_state(state, timeout=_NETWORKIDLE_MS)
+                    except Exception:
+                        logging.debug("post-solve %s wait timed out", state)
                 logging.info("Challenge solved!")
                 message = "Challenge solved!"
             else:
@@ -577,50 +623,100 @@ class StealthEngine(Engine):
             if kind == "denied":
                 raise Exception('Cloudflare has blocked this request. '
                                 'Probably your IP is banned for this site, check in your web browser.')
-            if kind != "challenge":
+            if kind == "challenge":
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    logging.debug("challenge still present (title=%r, url=%s)",
+                                  await page.title(), page.url)
+                if solver is not None:
+                    try:
+                        await solver.solve_captcha(
+                            captcha_container=page,
+                            captcha_type=captcha_type,
+                            wait_checkbox_attempts=1,
+                            wait_checkbox_delay=0.5,
+                        )
+                    except Exception as e:
+                        logging.debug("click-solve nudge: %s", e)
+                elif is_turnstile:
+                    token = await self._turnstile_token(page)
+                    # A standalone Turnstile widget stays in the DOM after solving,
+                    # so _detect keeps seeing it and only the filled token says it
+                    # cleared. An interstitial carries the same input but still has
+                    # to submit it and navigate, so there the token means the
+                    # challenge is progressing and the markup going is what ends it.
+                    if token and not await self._is_interstitial(page):
+                        return True
+                    # Never press over a box that already carries a token: that
+                    # restarts Cloudflare's verification instead of completing it.
+                    if not token and loop.time() - last_click >= _CLICK_COOLDOWN_SECONDS:
+                        if await self._click_turnstile(page):
+                            last_click = loop.time()
+            elif await self._challenge_stays_gone(page):
                 return True
-            if logging.getLogger().isEnabledFor(logging.DEBUG):
-                logging.debug("challenge still present (title=%r, url=%s)",
-                              await page.title(), page.url)
 
-            if solver is not None:
-                try:
-                    await solver.solve_captcha(
-                        captcha_container=page,
-                        captcha_type=captcha_type,
-                        wait_checkbox_attempts=1,
-                        wait_checkbox_delay=0.5,
-                    )
-                except Exception as e:
-                    logging.debug("click-solve nudge: %s", e)
-            elif is_turnstile and loop.time() - last_click >= _TURNSTILE_RECLICK_SECONDS:
-                # Verifying takes a few seconds after the click, and clicking again
-                # every pass would both restart it and read as machine input.
-                if await self._click_turnstile(page):
-                    last_click = loop.time()
-
-            # A standalone Turnstile widget stays in the DOM after solving, so
-            # _detect keeps seeing it. The filled token is the proof it cleared:
-            # the click-solver also returns without raising when it simply found
-            # no widget to click, so its silence means nothing on its own.
-            if is_turnstile and await self._turnstile_token(page):
-                return True
-            if (await self._detect_settled(page))[0] != "challenge":
-                return True
             if loop.time() >= deadline:
                 return False
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(_POLL_SECONDS)
+
+    async def _challenge_stays_gone(self, page) -> bool:
+        """Whether a clear reading holds up when the page is looked at again.
+
+        Cloudflare drops the challenge markup while it issues the next round, so
+        a single clear reading is not the end of the challenge: one request here
+        logged four distinct __cf_chl_tk tokens. Believing the first one hands
+        back an intermediate challenge page as if it were the destination.
+        """
+        await asyncio.sleep(_CHALLENGE_CONFIRM_SECONDS)
+        return (await self._detect_settled(page))[0] != "challenge"
+
+    async def _is_interstitial(self, page) -> bool:
+        """Whether a full-page challenge's own markup is on the page.
+
+        Distinguishes it from a site's standalone Turnstile widget, which shares
+        the token input but nothing else. Uses the narrow INTERSTITIAL_SELECTORS
+        rather than the full challenge list, which carries markers an embedded
+        widget shares and shapes an ordinary page can match by accident.
+        """
+        for sel in INTERSTITIAL_SELECTORS:
+            if await page.query_selector(sel):
+                return True
+        return False
 
     async def _click_turnstile(self, page) -> bool:
         """Click the Turnstile checkbox, without touching main-world JS.
 
-        The widget's iframe lives in a closed shadow root, so query_selector on the
-        page cannot reach it, and playwright-captcha's traversal into that root goes
-        through evaluate_handle, which the iframe's own CSP blocks under Firefox
-        ("call to eval() blocked by CSP"). The frame tree lists the iframe anyway,
-        and a coordinate click is dispatched by the browser rather than by page JS,
-        so neither the shadow root nor the CSP is in the way.
+        A coordinate click is dispatched by the browser rather than by page JS, so
+        neither the widget's closed shadow root nor the iframe's CSP is in the way.
+        Measuring it with page.evaluate would be, and worse: Byparr measured that
+        running page scripts against a live challenge makes Cloudflare reissue it.
         """
+        box = await self._widget_box(page)
+        if box is None:
+            return False
+        await page.mouse.click(box["x"] + _TURNSTILE_CHECKBOX_X,
+                               box["y"] + box["height"] / 2)
+        return True
+
+    async def _widget_box(self, page):
+        """The Turnstile widget's rect, from its iframe or from its container.
+
+        The iframe is the exact rect and is what a site's standalone widget
+        exposes, so it is tried first. Cloudflare's own interstitial builds the
+        widget itself and its challenge frame reports an empty URL to the parent,
+        which is what makes the frame tree unusable there (measured by Byparr,
+        ThePhaseless/Byparr#400, and the same reason playwright-captcha's
+        page.frames fallback cannot find it either). The container around the
+        token input is in the page's light DOM either way.
+        """
+        try:
+            box = await asyncio.wait_for(self._frame_box(page), _WIDGET_READ_SECONDS)
+        except Exception:
+            logging.debug("turnstile frame read did not answer", exc_info=True)
+            box = None
+        return box if box is not None else await self._container_box(page)
+
+    async def _frame_box(self, page):
+        """The widget iframe's rect, or None when no frame owns up to being one."""
         for frame in page.frames:
             if _TURNSTILE_FRAME_HOST not in (frame.url or ""):
                 continue
@@ -630,23 +726,51 @@ class StealthEngine(Engine):
                 logging.debug("turnstile frame read raced a navigation", exc_info=True)
                 continue
             # A widget that has not laid out yet reports no box; a later pass gets it.
-            if not box:
+            if box:
+                return box
+        return None
+
+    async def _container_box(self, page):
+        """The rect of the nearest ancestor of the token input that is a widget.
+
+        Walks out from the input because the input itself is hidden and has no
+        rect. The size guards are what keep a full-page wrapper from passing for
+        a checkbox row: without them a click lands on blank space while every
+        read still reports success.
+        """
+        for depth in _WIDGET_ANCESTOR_DEPTHS:
+            container = page.locator(f"{TURNSTILE_SELECTORS[0]} >> xpath=ancestor::div[{depth}]")
+            try:
+                if await container.count() == 0:
+                    continue
+                box = await container.first.bounding_box(timeout=_ELEMENT_READ_MS)
+            except Exception:
+                logging.debug("turnstile container read raced a navigation", exc_info=True)
                 continue
-            await page.mouse.click(box["x"] + _TURNSTILE_CHECKBOX_X,
-                                   box["y"] + box["height"] / 2)
-            return True
-        return False
+            if (box and box["width"] > _WIDGET_MIN_WIDTH
+                    and _WIDGET_MIN_HEIGHT < box["height"] < _WIDGET_MAX_HEIGHT):
+                return box
+        return None
 
     async def _turnstile_token(self, page) -> Optional[str]:
-        """Value of a standalone Turnstile input (the solved token), or None.
+        """Value of a Turnstile input (the solved token), or None.
 
-        Uses get_attribute, which works even under a challenge page's CSP. A read
-        that races a navigation reports None, which only ever means "not solved
-        yet" to the caller, so the wait loop simply looks again.
+        Reads the value property, not the `value` attribute. Cloudflare's own
+        widget happens to write both, measured against the live widget, so the
+        attribute read this replaces was not wrong there. It is wrong for a token
+        that playwright-captcha injects for the paid escalation, which assigns
+        `input.value` only (`appliers/applyCloudflareTurnstile.js`), and assigning
+        a value never updates the attribute. The property is the element's current
+        value either way, which is also what Selenium hands the Chrome engine.
+
+        A read that races a navigation reports None, which only ever means "not
+        solved yet" to the caller, so the wait loop simply looks again.
         """
         try:
-            el = await page.query_selector(TURNSTILE_SELECTORS[0])
-            return (await el.get_attribute("value")) if el else None
+            token = page.locator(TURNSTILE_SELECTORS[0])
+            if await token.count() == 0:
+                return None
+            return await token.first.input_value(timeout=_ELEMENT_READ_MS) or None
         except Exception:
             logging.debug("turnstile token read raced a navigation", exc_info=True)
             return None

@@ -41,11 +41,16 @@ class ChromeEngine(Engine):
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
         driver = None
+        # get() hands the session over already marked in use, so nothing can quit
+        # the browser under this request. Released in the finally below, which
+        # runs in this thread and so survives func_timeout stopping the worker.
+        in_use = None
         try:
             if req.session:
                 session_id = req.session
                 ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
-                session, fresh = self._sessions.get(session_id, ttl)
+                session, fresh = self._sessions.get(session_id, ttl, req.proxy)
+                in_use = session
 
                 if fresh:
                     logging.debug(f"new session created to perform the request (session_id={session_id})")
@@ -64,6 +69,8 @@ class ChromeEngine(Engine):
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
+            if in_use is not None:
+                self._sessions.end_use(in_use)
             if not req.session and driver is not None:
                 if utils.PLATFORM_VERSION == "nt":
                     driver.close()

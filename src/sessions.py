@@ -16,6 +16,9 @@ class Session:
     driver: WebDriver
     created_at: datetime
     last_used: datetime = field(default=None)  # type: ignore[assignment]
+    # Requests currently solving on this driver. Guarded by SessionsStorage's
+    # lock, and read by the reaper so it never quits a browser mid-request.
+    in_use: int = 0
 
     def __post_init__(self):
         if self.last_used is None:
@@ -96,14 +99,38 @@ class SessionsStorage:
         self._teardown(session)
         return True
 
-    def get(self, session_id: str, ttl: Optional[timedelta] = None) -> Tuple[Session, bool]:
-        session, fresh = self.create(session_id)
+    def get(self, session_id: str, ttl: Optional[timedelta] = None,
+            proxy: Optional[dict] = None) -> Tuple[Session, bool]:
+        """Return the session **marked in use**, creating it if it isn't there.
+
+        The caller owns the mark and must pass the session to ``end_use`` when it
+        is done, which is what keeps the reaper and the cap off a live browser.
+        Marking happens here rather than in the caller so nothing can evict the
+        session between handing it out and the request starting on it.
+
+        The proxy has to reach both create calls below. Without it a session that
+        outlives its TTL comes back on a direct connection, and one named by a
+        request before it exists is born that way, which is silent: the browser
+        still solves, just from the server's own address.
+        """
+        session, fresh = self.create(session_id, proxy)
 
         if ttl is not None and not fresh and session.lifetime() > ttl:
-            logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
-            session, fresh = self.create(session_id, force_new=True)
+            with self._lock:
+                busy = session.in_use > 0
+            if busy:
+                # Recreating quits the driver, and another request is driving it
+                # right now. Let this request reuse the old browser; the next one
+                # to find it idle does the recreation.
+                logging.debug(f'session\'s lifetime has expired but a request is still on it, '
+                              f'so it is reused (session_id={session_id})')
+            else:
+                logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
+                session, fresh = self.create(session_id, proxy, force_new=True)
 
-        session.last_used = datetime.now()
+        with self._lock:
+            session.last_used = datetime.now()
+            session.in_use += 1
         return session, fresh
 
     def touch(self, session_id: str) -> None:
@@ -112,13 +139,22 @@ class SessionsStorage:
         if session is not None:
             session.last_used = datetime.now()
 
+    def end_use(self, session: Session) -> None:
+        """Release the mark ``get`` took, so the session can be reaped again."""
+        with self._lock:
+            session.in_use = max(0, session.in_use - 1)
+
     def reap_idle(self, ttl: timedelta) -> List[str]:
         """Close and remove sessions idle longer than ``ttl``. Returns reaped ids."""
         if ttl is None or ttl.total_seconds() <= 0:
             return []
         now = datetime.now()
         with self._lock:
-            stale = [sid for sid, s in self.sessions.items() if (now - s.last_used) > ttl]
+            # A session solving right now is not idle, whatever its timestamp
+            # says: quitting the driver under it kills the request with an
+            # "invalid session id" that the caller cannot do anything about.
+            stale = [sid for sid, s in self.sessions.items()
+                     if (now - s.last_used) > ttl and not s.in_use]
             popped = [self.sessions.pop(sid) for sid in stale]
         for session in popped:
             self._teardown(session)
@@ -131,7 +167,10 @@ class SessionsStorage:
         with self._lock:
             if len(self.sessions) <= max_sessions:
                 return []
-            ordered = sorted(self.sessions.values(), key=lambda s: s.last_used)
+            # Never evict a session mid-solve, for the reason above. The cap is
+            # best-effort, so under full pressure this just evicts fewer.
+            ordered = sorted((s for s in self.sessions.values() if not s.in_use),
+                             key=lambda s: s.last_used)
             to_remove = ordered[: len(self.sessions) - max_sessions]
             for s in to_remove:
                 self.sessions.pop(s.session_id, None)

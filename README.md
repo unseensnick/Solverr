@@ -111,7 +111,7 @@ A client can **force** an engine per request with the optional `engine` field; t
 | `chrome`         | Chrome only, no fallback.                                                                                      |
 | `stealth`        | Camoufox only, no fallback.                                                                                    |
 
-Fallback triggers when an engine throws (blocked / timeout), or returns a page that still looks like an unsolved challenge. Set `ENGINE_FALLBACK=false` to disable it.
+Fallback triggers when an engine throws (blocked / timeout), or returns a page that still looks like an unsolved challenge. Set `ENGINE_FALLBACK=false` to disable it. Both attempts share the request's `maxTimeout`, so falling back never makes the caller wait longer than it asked for; if too little is left for a second browser to launch, Solverr stops and reports why the first engine failed.
 
 > **`DEFAULT_ENGINE=chrome` does not disable fallback.** The "no fallback" rows apply only to the per-request `engine` field (a client forcing one engine). `DEFAULT_ENGINE` just picks the *primary*; the other engine is still used as fallback unless `ENGINE_FALLBACK=false`. Most FlareSolverr clients (the *arr apps, readers) don't send an `engine` field, so they always get the fallback path.
 
@@ -184,7 +184,7 @@ Shuts a session's browser down and frees its resources.
 | engine              | Optional. `chrome`, `stealth`, or `auto` (default). See [Engines & fallback](#engines--fallback).                                                                |
 | session             | Optional. Reuse an existing browser instance. Without it, a temporary instance is created and destroyed after the request.                                      |
 | session_ttl_minutes | Optional. Recreate the session if it is older than this many minutes.                                                                                            |
-| maxTimeout          | Optional, default 60000. Max time to solve the challenge, in milliseconds.                                                                                       |
+| maxTimeout          | Optional, default 60000. Max time to answer the request, in milliseconds. It covers the whole request, so a fallback to the other engine shares it rather than starting a fresh one. |
 | cookies             | Optional. Cookies to set before loading. Eg `"cookies": [{"name": "a", "value": "1"}]`.                                                                          |
 | returnOnlyCookies   | Optional, default false. Return only cookies; drop response body and headers.                                                                                    |
 | returnScreenshot    | Optional, default false. Return a Base64 PNG of the final page in the `screenshot` field.                                                                        |
@@ -214,7 +214,7 @@ Example response (truncated):
   },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "1.3.0"
+  "version": "1.4.0"
 }
 ```
 
@@ -337,7 +337,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = refuse every request, so it's never a blind open proxy. |
 | `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
 | `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
-| `PASSTHROUGH_TIMEOUT_MS`   | `120000`  | `maxTimeout` handed to the solver per request.                                 |
+| `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. |
 
 ### Browser, logging & server
 

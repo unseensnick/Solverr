@@ -1,10 +1,15 @@
 import logging
 import os
 import platform
+import re
 import sys
 import threading
 import time
 from urllib.parse import urlparse
+
+# Only these two schemes may reach a browser, matched on the literal prefix so
+# nothing normalizes its way past the check. See _validate_url.
+_HTTP_URL = re.compile(r'^https?://', re.IGNORECASE)
 
 import config
 import detection
@@ -135,6 +140,7 @@ def _cmd_request_get(req: V1RequestBase) -> V1ResponseBase:
     if req.url is None:
         raise Exception("Request parameter 'url' is mandatory in 'request.get' command.")
     _validate_url(req.url)
+    _validate_session_ttl(req)
     if req.postData is not None:
         raise Exception("Cannot use 'postBody' when sending a GET request.")
     if req.returnRawHtml is not None:
@@ -155,6 +161,7 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
     if req.postData is None:
         raise Exception("Request parameter 'postData' is mandatory in 'request.post' command.")
     _validate_url(req.url)
+    _validate_session_ttl(req)
     if req.returnRawHtml is not None:
         logging.warning("Request parameter 'returnRawHtml' was removed in FlareSolverr v2.")
     if req.download is not None:
@@ -171,7 +178,7 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
 def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
     logging.debug("Creating new session...")
 
-    engine = (req.engine or config.default_engine()).lower()
+    engine = _validate_engine(req.engine) or config.default_engine().lower()
     if engine == 'stealth':
         if STEALTH_ENGINE is None:
             raise Exception("Stealth engine is not available (STEALTH_ENGINE disabled or dependencies missing).")
@@ -225,6 +232,10 @@ def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
     })
 
 
+# Below this, a fallback engine cannot launch a browser and reach a page, so
+# spending what is left only replaces the first engine's error with a timeout.
+_MIN_ENGINE_SECONDS = 5.0
+
 # Per-domain memory of which engine last cleared a host, so a host that only the
 # stealth engine can solve skips the failing Chrome attempt on later requests.
 _DOMAIN_ENGINE = {}
@@ -252,11 +263,43 @@ def _validate_url(url) -> None:
     Solverr has no auth, so without this a `file://` or `data:` URL turns /v1
     into a local-file reader for anyone who can reach the port: the browser
     fetches it and the content comes back in `solution.response`.
+
+    Anchored on the literal prefix, which is the shape Byparr validates against
+    too. urlparse alone is looser than it looks: it strips leading whitespace
+    before reading the scheme and accepts a single slash, so ' https://x' and
+    'https:/x' both passed and were handed to a browser to normalize.
     """
     if not url:
         raise Exception("Request parameter 'url' is mandatory.")
-    if urlparse(url).scheme not in ('http', 'https'):
+    if not _HTTP_URL.match(url):
         raise Exception("Request parameter 'url' must be an 'http://' or 'https://' URL.")
+
+
+def _validate_session_ttl(req: V1RequestBase) -> None:
+    """Reject a session lifetime that cannot mean anything.
+
+    A negative value makes a negative timedelta, which every session then
+    compares as already expired, so the browser is rebuilt on every request and
+    sessions quietly stop being sessions. Saying so beats looking broken.
+    """
+    ttl = req.session_ttl_minutes
+    if ttl is None:
+        return
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < 0:
+        raise Exception("Request parameter 'session_ttl_minutes' must be a positive number of minutes.")
+
+
+def _validate_engine(engine) -> str:
+    """The requested engine lower-cased, or '' when unset. Raises on anything else.
+
+    A misspelled name used to fall through to the default engine, so a caller
+    that meant to pin one got an answer from the other and never found out.
+    """
+    forced = (engine or '').strip().lower()
+    if forced in ('', 'auto', 'chrome', 'stealth'):
+        return forced
+    raise Exception(f"Request parameter 'engine' = '{engine}' is invalid. "
+                    "Use 'chrome', 'stealth', or 'auto'.")
 
 
 def _host_of(req: V1RequestBase):
@@ -289,7 +332,7 @@ def _engine_plan(req: V1RequestBase):
     """
     available = _available_engines()
 
-    forced = (req.engine or '').strip().lower()
+    forced = _validate_engine(req.engine)
     if forced in ('chrome', 'stealth'):
         if forced not in available:
             raise Exception(f"Requested engine '{forced}' is not available.")
@@ -333,15 +376,43 @@ def _looks_challenged(result: SolveResult) -> bool:
 
 
 def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
+    """Solve ``req``, trying each planned engine within one shared budget.
+
+    ``maxTimeout`` is how long the caller is willing to wait for an answer, so it
+    covers the whole request rather than each engine in turn. Handing the full
+    value to every engine made a two-engine fallback take up to twice as long as
+    asked, which is long enough to trip the caller's own timeout while Solverr
+    still believed it was inside the budget.
+
+    Each engine gets an even share of what is left rather than all of it, because
+    a first engine that runs its budget out leaves nothing for the fallback.
+    Measured on a host only Chrome can clear: with the whole budget, the stealth
+    engine spent all 120s and Chrome never ran, turning a request that used to
+    succeed into a failure. An even share also costs nothing when the first
+    engine is quick, since the fallback then inherits almost all of the budget.
+    """
     timeout = int(req.maxTimeout) / 1000
+    deadline = time.monotonic() + timeout
     order, _can_fallback = _engine_plan(req)
     host = _host_of(req)
 
     last_error = None
+    # A result an engine did return, that only looked unsolved. Kept so running
+    # out of budget hands it back rather than turning it into an error.
+    last_result = None
     for i, engine in enumerate(order):
+        remaining = deadline - time.monotonic()
+        if i > 0 and remaining < _MIN_ENGINE_SECONDS:
+            # Too little left for another browser to launch and navigate. Stop
+            # here so the caller gets the reason the previous engine failed,
+            # instead of a timeout this one was always going to hit.
+            logging.info("Budget spent after engine '%s'; not trying '%s' with %.1fs left",
+                         order[i - 1].name, engine.name, remaining)
+            break
         is_last = i == len(order) - 1
+        share = remaining if is_last else remaining / (len(order) - i)
         try:
-            result = engine.solve(req, method, timeout)
+            result = engine.solve(req, method, share)
         except Exception as e:
             last_error = e
             if is_last:
@@ -352,6 +423,7 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
 
         if not is_last and _looks_challenged(result):
             last_error = Exception(f"Engine '{engine.name}' returned an unsolved challenge page")
+            last_result = result
             logging.info("Engine '%s' returned an unsolved challenge page; falling back to '%s'...",
                          engine.name, order[i + 1].name)
             continue
@@ -360,6 +432,12 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
         logging.info("Solved %s with engine '%s'", host or req.url, engine.name)
         return _to_challenge_resolution(result)
 
+    if last_result is not None:
+        # No engine left to try, so hand back the page the last one did return.
+        # That is what would have happened had it been last in the plan, and the
+        # caller can judge the challenge page for itself.
+        logging.info("No engine left to try; returning the last page received")
+        return _to_challenge_resolution(last_result)
     raise last_error or Exception("All engines failed to solve the challenge.")
 
 

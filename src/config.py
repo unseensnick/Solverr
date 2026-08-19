@@ -212,5 +212,11 @@ def passthrough_cache_ttl() -> int:
 
 
 def passthrough_timeout_ms() -> int:
-    """maxTimeout handed to the solver for each passthrough request."""
-    return _int_env('PASSTHROUGH_TIMEOUT_MS', 120000)
+    """maxTimeout handed to the solver for each passthrough request.
+
+    Under the client's own patience rather than over it: an indexer app gives a
+    request about 100 seconds, and a solve that outlives that is recorded as an
+    indexer failure and puts it into backoff, which costs far more than the one
+    request. 90 seconds leaves the answer (or the error) inside that window.
+    """
+    return _int_env('PASSTHROUGH_TIMEOUT_MS', 90000)
