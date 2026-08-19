@@ -72,6 +72,9 @@ Never bypass with `--no-verify`. If a hook fires on something legitimate, fix th
 
 - Investigate before planning when context is thin: read the code, trace the pattern, cite `file:line`, then plan.
 - Plan non-trivial work before acting; get approval before large changes.
+- **Name the check before making the change.** Which of these would catch you being wrong: the browser-free suite, `/live-check`, or the indexer chain? Say which, then run it. A change to detection or the engines that only compiles has not been verified at all.
+- **A check that cannot fail is not a check.** The browser-free tests cannot tell you whether a page still clears, and one passing live request is not evidence: Cloudflare's behavior varies by IP reputation and by hour, so reliability claims need a tally and mechanism claims need an A/B in the same window.
+- State assumptions rather than picking one silently, especially about which engine, which surface (`/v1` or the passthrough), and whether a change is a port or net-new. `/scout` exists to stop a plan resting on a misread.
 - Stop and replan when blocked. Never circumvent (deleting a test, silencing a linter, skipping a hook, forcing past a denial).
 
 ## Fork compatibility (don't break)
