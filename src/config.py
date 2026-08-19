@@ -211,6 +211,18 @@ def passthrough_cache_ttl() -> int:
     return _int_env('PASSTHROUGH_CACHE_TTL', 3600)
 
 
+def passthrough_cache_max_bytes() -> int:
+    """Ceiling on the total bytes the response cache may hold (0 or less lifts it).
+
+    The TTL bounds how long a body is kept, not how much: every distinct path a
+    client asks for inside one TTL window accumulated with no ceiling, and a
+    non-HTML document is held as decoded bytes, so a handful of large ones cost
+    proportionally more than pages do. 256 MB is generous next to the image and
+    the two browsers it runs.
+    """
+    return _int_env('PASSTHROUGH_CACHE_MAX_BYTES', 268435456)
+
+
 def passthrough_timeout_ms() -> int:
     """maxTimeout handed to the solver for each passthrough request.
 

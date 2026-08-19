@@ -283,6 +283,7 @@ Notes and limits:
 - **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
 - Encode the mirror as a **bare host** (`example-site.tld`), not `https://…` — clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
 - Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
+- The cache holds at most `PASSTHROUGH_CACHE_MAX_BYTES` in total. The TTL alone bounded how long a body was kept but not how much was kept, so a client walking many pages inside one TTL window could hold all of them at once.
 - It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
 
 ## Configuration
@@ -337,6 +338,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = refuse every request, so it's never a blind open proxy. |
 | `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
 | `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
+| `PASSTHROUGH_CACHE_MAX_BYTES` | `268435456` | Ceiling on the total bytes the cache holds (`0` lifts it). Past the ceiling the soonest-to-expire entries are evicted first. A single body over a quarter of the ceiling is served but not cached. |
 | `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. |
 
 ### Browser, logging & server
