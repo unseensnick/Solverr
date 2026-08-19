@@ -184,7 +184,7 @@ Shuts a session's browser down and frees its resources.
 | engine              | Optional. `chrome`, `stealth`, or `auto` (default). See [Engines & fallback](#engines--fallback).                                                                |
 | session             | Optional. Reuse an existing browser instance. Without it, a temporary instance is created and destroyed after the request.                                      |
 | session_ttl_minutes | Optional. Recreate the session if it is older than this many minutes.                                                                                            |
-| maxTimeout          | Optional, default 60000. Max time to answer the request, in milliseconds. It covers the whole request, so a fallback to the other engine shares it rather than starting a fresh one. |
+| maxTimeout          | Optional, default 60000. Max time to answer the request, in milliseconds. It covers the whole request, so a fallback to the other engine shares it rather than starting a fresh one. Clamped to `MAX_TIMEOUT_MS` (default 180000). |
 | cookies             | Optional. Cookies to set before loading. Eg `"cookies": [{"name": "a", "value": "1"}]`.                                                                          |
 | returnOnlyCookies   | Optional, default false. Return only cookies; drop response body and headers.                                                                                    |
 | returnScreenshot    | Optional, default false. Return a Base64 PNG of the final page in the `screenshot` field.                                                                        |
@@ -308,6 +308,7 @@ All settings are environment variables and all are optional.
 | `SESSION_TTL_MINUTES`     | `30`    | Idle minutes before the reaper closes a session's browser (`0` disables). |
 | `SESSION_MAX`             | `20`    | Max concurrent sessions per engine before oldest-idle eviction.          |
 | `REAPER_INTERVAL_SECONDS` | `60`    | How often the reaper scans.                                              |
+| `MAX_TIMEOUT_MS`          | `180000` | Ceiling on a request's `maxTimeout` (`0` lifts it). A larger request is clamped to this with a warning rather than refused, so existing callers keep working. |
 
 ### Proxy
 
