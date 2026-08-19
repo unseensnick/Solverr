@@ -1,5 +1,24 @@
+# Everything here is either useless in the image or expensive to send to the
+# daemon. .venv alone was 165 MB of a 170 MB context, and __pycache__ is worse
+# than useless: `COPY src .` carried the host's .pyc files (including ones built
+# for a Python the image does not have), and rewriting them locally invalidated
+# that layer and every layer after it.
+#
+# The `**/` on the cache patterns is load-bearing: Docker matches a bare
+# `__pycache__/` against the context root only, so it missed src/__pycache__ and
+# 55 .pyc files still reached the image.
 .git/
 .github/
+.githooks/
+.claude/
 .idea/
+.venv/
+**/__pycache__/
+**/*.pyc
+docs/
 html_samples/
-resources/
+CHANGELOG.md
+CLAUDE.md
+CLAUDE.local.md.example
+Handoff.md
+README.md
