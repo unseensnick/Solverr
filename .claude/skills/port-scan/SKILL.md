@@ -67,7 +67,7 @@ Eligibility is about **how well the change is understood, never about how few li
 
 `loop:ready` requires all of:
 
-- **The full scope is enumerated in the issue.** Before labeling, grep for every place the change applies (both engines, the controller, the detection lists) and list each with `file:line`. If the search cannot be made exhaustive, the scope is not known, so the label is `loop:needs-human`.
+- **The full scope is enumerated in the issue.** Before labeling, search recursively for every place the change applies (both engines, the controller, the detection lists) and list each with `file:line`. Use `grep -rn '<pattern>' src/ --include=*.py`, never `src/*.py`: a top-level glob skips `src/engines/` and `src/bottle_plugins/` and reports a confident zero. If the search cannot be made exhaustive, the scope is not known, so the label is `loop:needs-human`.
 - It is covered by the browser-free suite, or the change is provably inert to solving (a log line, a message string, a bounds check).
 - No ledger divergence entry names any file in that scope.
 - It changes neither the `/v1` request or response shape nor the `"FlareSolverr is ready!"` banner.

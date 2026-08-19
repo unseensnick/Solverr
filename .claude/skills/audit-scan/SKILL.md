@@ -62,7 +62,9 @@ One per run. A sweep over everything produces shallow findings in all of it, and
 
 Read the dimension's files directly. Look for the things that are actually true here rather than a generic checklist: disagreement between the two engines, a resource acquired on one path and released on another, an `except` that swallows the case it was written for, a value from the request reaching a browser or a shell without validation, a default that is safe on one engine and not the other, an unbounded accumulation.
 
-For each candidate, before it is allowed to become a finding, **enumerate every site**. Grep for the pattern across `src/`, list each hit with `file:line`, and record the search itself so the worker can re-run it. A candidate with one known site and no search behind it is not ready to file.
+For each candidate, before it is allowed to become a finding, **enumerate every site**. List each hit with `file:line`, and record the search itself so the worker can re-run it. A candidate with one known site and no search behind it is not ready to file.
+
+**Search recursively from `src/`, never `src/*.py`.** A glob stops at the top level and silently skips `src/engines/` and `src/bottle_plugins/`, which is where half the interesting code lives. That mistake produced a false finding on the first run of this skill: `end_use` looked like it was never called anywhere, because the only caller is `src/engines/chrome_engine.py:73`. Use `grep -rn '<pattern>' src/ --include=*.py`, or the `Grep` tool with a directory path, and confirm the hit count is plausible before trusting a zero.
 
 ## Step 4: Refute, then file what survives
 
