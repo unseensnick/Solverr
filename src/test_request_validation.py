@@ -43,6 +43,32 @@ if __name__ == '__main__':
     unittest.main()
 
 
+class SessionTtl(unittest.TestCase):
+    """A lifetime that cannot mean anything is refused, not silently applied."""
+
+    def test_a_positive_ttl_is_accepted(self):
+        req = V1RequestBase({"url": "https://example-site.tld/", "session_ttl_minutes": 30})
+
+        self.assertIsNone(flaresolverr_service._validate_session_ttl(req))
+
+    def test_an_unset_ttl_is_accepted(self):
+        req = V1RequestBase({"url": "https://example-site.tld/"})
+
+        self.assertIsNone(flaresolverr_service._validate_session_ttl(req))
+
+    def test_a_negative_ttl_is_rejected(self):
+        req = V1RequestBase({"url": "https://example-site.tld/", "session_ttl_minutes": -5})
+
+        with self.assertRaises(Exception):
+            flaresolverr_service._validate_session_ttl(req)
+
+    def test_a_ttl_that_is_not_a_number_is_rejected(self):
+        req = V1RequestBase({"url": "https://example-site.tld/", "session_ttl_minutes": "30"})
+
+        with self.assertRaises(Exception):
+            flaresolverr_service._validate_session_ttl(req)
+
+
 class EngineSelection(unittest.TestCase):
     """An engine the service does not have is an error, not a silent default."""
 
@@ -60,3 +86,18 @@ class EngineSelection(unittest.TestCase):
         order, _ = flaresolverr_service._engine_plan(req)
 
         self.assertTrue(order)
+
+
+class UrlPrefix(unittest.TestCase):
+    """urlparse alone let two shapes through that normalize into a fetch."""
+
+    def test_a_leading_space_is_rejected(self):
+        with self.assertRaises(Exception):
+            _validate_url(" https://example-site.tld/")
+
+    def test_a_single_slash_scheme_is_rejected(self):
+        with self.assertRaises(Exception):
+            _validate_url("https:/example-site.tld/")
+
+    def test_an_uppercase_scheme_is_still_accepted(self):
+        self.assertIsNone(_validate_url("HTTPS://example-site.tld/"))

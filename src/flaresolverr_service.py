@@ -1,10 +1,15 @@
 import logging
 import os
 import platform
+import re
 import sys
 import threading
 import time
 from urllib.parse import urlparse
+
+# Only these two schemes may reach a browser, matched on the literal prefix so
+# nothing normalizes its way past the check. See _validate_url.
+_HTTP_URL = re.compile(r'^https?://', re.IGNORECASE)
 
 import config
 import detection
@@ -135,6 +140,7 @@ def _cmd_request_get(req: V1RequestBase) -> V1ResponseBase:
     if req.url is None:
         raise Exception("Request parameter 'url' is mandatory in 'request.get' command.")
     _validate_url(req.url)
+    _validate_session_ttl(req)
     if req.postData is not None:
         raise Exception("Cannot use 'postBody' when sending a GET request.")
     if req.returnRawHtml is not None:
@@ -155,6 +161,7 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
     if req.postData is None:
         raise Exception("Request parameter 'postData' is mandatory in 'request.post' command.")
     _validate_url(req.url)
+    _validate_session_ttl(req)
     if req.returnRawHtml is not None:
         logging.warning("Request parameter 'returnRawHtml' was removed in FlareSolverr v2.")
     if req.download is not None:
@@ -252,11 +259,30 @@ def _validate_url(url) -> None:
     Solverr has no auth, so without this a `file://` or `data:` URL turns /v1
     into a local-file reader for anyone who can reach the port: the browser
     fetches it and the content comes back in `solution.response`.
+
+    Anchored on the literal prefix, which is the shape Byparr validates against
+    too. urlparse alone is looser than it looks: it strips leading whitespace
+    before reading the scheme and accepts a single slash, so ' https://x' and
+    'https:/x' both passed and were handed to a browser to normalize.
     """
     if not url:
         raise Exception("Request parameter 'url' is mandatory.")
-    if urlparse(url).scheme not in ('http', 'https'):
+    if not _HTTP_URL.match(url):
         raise Exception("Request parameter 'url' must be an 'http://' or 'https://' URL.")
+
+
+def _validate_session_ttl(req: V1RequestBase) -> None:
+    """Reject a session lifetime that cannot mean anything.
+
+    A negative value makes a negative timedelta, which every session then
+    compares as already expired, so the browser is rebuilt on every request and
+    sessions quietly stop being sessions. Saying so beats looking broken.
+    """
+    ttl = req.session_ttl_minutes
+    if ttl is None:
+        return
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < 0:
+        raise Exception("Request parameter 'session_ttl_minutes' must be a positive number of minutes.")
 
 
 def _validate_engine(engine) -> str:
