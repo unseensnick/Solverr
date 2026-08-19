@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "dependencyDashboard": false,
+  "packageRules": [
+    {
+      "description": "Everything else shares one PR, so a quiet week is a single review.",
+      "matchManagers": ["pip_requirements"],
+      "groupName": "python dependencies"
+    },
+    {
+      "description": "The stealth browser stack gets its own PR. invisible-playwright carries the patched Firefox and is pinned exactly for that reason, so a bump changes how solving behaves while the build stays green. Run /live-check before merging one. This rule sits after the group above on purpose: for these packages the later rule wins.",
+      "matchPackageNames": ["invisible-playwright", "playwright", "playwright-captcha"],
+      "groupName": "stealth browser stack",
+      "addLabels": ["needs-live-check"]
+    },
+    {
+      "description": "Never auto-merge: nothing gates a PR on a real solve, and a bad browser or driver bump breaks solving without failing the build.",
+      "matchPackageNames": ["*"],
+      "automerge": false
+    }
+  ]
+}
