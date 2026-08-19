@@ -10,6 +10,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **A `request.post` to a URL containing a double quote now reaches that URL.** The quote ended the form's target early, so the request went to a truncated address and was sent as a GET instead of a POST, losing both the rest of the URL and the method.
 
+- **The passthrough now answers before an indexer app gives up on it.** `PASSTHROUGH_TIMEOUT_MS` drops from 120000 to 90000, under the roughly 100 seconds those apps wait. A solve that outlived that was recorded as an indexer failure and put the indexer into backoff, so one slow page disabled it for everything until the backoff cleared. Set the variable if you want the old value.
+
 - **`maxTimeout` now covers the whole request, not each engine in turn.** When a request fell back to the other engine, that engine started a fresh full timeout, so a 60 second request could take 120. Measured against an unreachable host: 44.4 seconds for a 20 second request before, 21.6 after. Clients that set their own timeout, like the *arr apps, were hitting it while Solverr still thought it was inside the budget. With fallback on, each engine gets an even share of what is left, so raise `maxTimeout` if a site needs a long solve on a single engine.
 
 - **Chrome keeps its popup fix when a proxy with a username and password is set.** The two browser flags involved were passed separately and the second replaced the first, so configuring an authenticated proxy silently switched the other one off.

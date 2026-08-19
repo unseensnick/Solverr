@@ -337,7 +337,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = refuse every request, so it's never a blind open proxy. |
 | `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
 | `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
-| `PASSTHROUGH_TIMEOUT_MS`   | `120000`  | `maxTimeout` handed to the solver per request.                                 |
+| `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. |
 
 ### Browser, logging & server
 
