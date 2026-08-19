@@ -41,7 +41,8 @@ Stop and report rather than continuing if any of these fail:
 
 1. Rename `## [Unreleased]` to `## [<version>]` and add a fresh empty `## [Unreleased]` above it.
 2. Bump `version` in `package.json`.
-3. Commit as `chore(release): <version>`, nothing else in that commit.
+3. Bump the `"version"` field in the `README.md` `/v1` response example. It is easy to miss because nothing fails without it: the docs simply keep advertising the previous release. Check with `grep -n '"version"' README.md`, which should return exactly one line and it should read the version being cut. This was missed on the 1.5.0 cut.
+4. Commit as `chore(release): <version>`, nothing else in that commit.
 
 ## Step 4: Push, then tag
 
