@@ -14,6 +14,12 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 - **`maxTimeout` now covers the whole request, not each engine in turn.** When a request fell back to the other engine, that engine started a fresh full timeout, so a 60 second request could take 120. Measured against an unreachable host: 44.4 seconds for a 20 second request before, 21.6 after. Clients that set their own timeout, like the *arr apps, were hitting it while Solverr still thought it was inside the budget. With fallback on, each engine gets an even share of what is left, so raise `maxTimeout` if a site needs a long solve on a single engine.
 
+- **A misspelled `engine` is refused instead of being answered by the default engine.** `engine: "stelth"` used to fall through and solve on whichever engine was primary, so a client that meant to pin one never found out it hadn't. The accepted values are `chrome`, `stealth`, and `auto`.
+
+- **`session_ttl_minutes` has to be a positive number of minutes.** A negative value made every session compare as already expired, so the browser was rebuilt on every request and sessions quietly stopped being sessions.
+
+- **A `url` has to start with `http://` or `https://` exactly.** `" https://example-site.tld"` and `"https:/example-site.tld"` were accepted and left to the browser to sort out; both are now refused at the door, like every other scheme.
+
 - **Chrome keeps its popup fix when a proxy with a username and password is set.** The two browser flags involved were passed separately and the second replaced the first, so configuring an authenticated proxy silently switched the other one off.
 
 - **A busy session is no longer closed out from under the request using it.** The cleanup that closes idle browsers, and the one that enforces the session cap, both judged a session only by when it was last handed out. Under load, or with a short `SESSION_TTL_MINUTES`, either could close the browser mid-request and fail it with an error the caller could do nothing about.
