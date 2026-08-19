@@ -4,6 +4,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+## [1.4.0]
+
 ### Fixes
 
 - **A solved page is no longer handed back while the challenge is still running.** Cloudflare briefly removes the challenge from the page between rounds, and that gap could be mistaken for the challenge being over, which returned the waiting page instead of the site. A solve now confirms the challenge is really gone, and waits for the page it was hiding to load. Solving takes about a second longer as a result.
