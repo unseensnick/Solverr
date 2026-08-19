@@ -114,8 +114,7 @@ def _controller_v1_handler(req: V1RequestBase) -> V1ResponseBase:
         logging.warning("Request parameter 'userAgent' was removed in FlareSolverr v2.")
 
     # set default values
-    if req.maxTimeout is None or int(req.maxTimeout) < 1:
-        req.maxTimeout = 60000
+    _validate_max_timeout(req)
 
     # execute the command
     res: V1ResponseBase
@@ -287,6 +286,40 @@ def _validate_session_ttl(req: V1RequestBase) -> None:
         return
     if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < 0:
         raise Exception("Request parameter 'session_ttl_minutes' must be a positive number of minutes.")
+
+
+def _validate_max_timeout(req: V1RequestBase) -> None:
+    """Bound the request budget at both ends, and clamp it to the ceiling.
+
+    Unbounded above, one request holds a browser for as long as the caller asks
+    for, and the session it marks in use is skipped by the reaper for that whole
+    time, so the browser cannot be reclaimed either. Clamping rather than
+    refusing keeps a client that already asks for more than the ceiling working.
+
+    The value is coerced rather than type-checked because a numeric string has
+    always been accepted here and reaches the budget through int(); refusing one
+    now would break callers that work today. Only a value that cannot be read as
+    a number is refused, and it says so instead of raising ValueError from inside
+    the budget arithmetic.
+    """
+    if req.maxTimeout is None:
+        req.maxTimeout = 60000
+        return
+    if isinstance(req.maxTimeout, bool):
+        raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
+    try:
+        value = int(req.maxTimeout)
+    except (TypeError, ValueError):
+        raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
+    if value < 1:
+        req.maxTimeout = 60000
+        return
+    ceiling = config.max_timeout_ms()
+    if 0 < ceiling < value:
+        logging.warning("Request parameter 'maxTimeout' of %dms is above the %dms ceiling and was "
+                        "clamped. Raise MAX_TIMEOUT_MS if a longer budget is intended.", value, ceiling)
+        value = ceiling
+    req.maxTimeout = value
 
 
 def _validate_engine(engine) -> str:

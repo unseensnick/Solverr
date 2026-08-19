@@ -184,6 +184,20 @@ def captcha_api_max_attempts() -> int:
     return _int_env('CAPTCHA_API_MAX_ATTEMPTS', 3)
 
 
+def max_timeout_ms() -> int:
+    """Ceiling on a request's maxTimeout (0 or less lifts it).
+
+    Left unbounded, one request holds a browser for as long as the caller asks,
+    and the session it marks in use cannot be reaped while it runs, so the
+    reaper cannot reclaim that browser either. The default sits above the real
+    worst case rather than at a round number: a request that legitimately
+    succeeded in 133 seconds is on record after the budget was split evenly
+    across engines, so a ceiling at or below 120000 would refuse work that
+    currently completes.
+    """
+    return _int_env('MAX_TIMEOUT_MS', 180000)
+
+
 # ---- Optional passthrough proxy (dormant unless enabled) ---------------------
 
 def passthrough_enabled() -> bool:

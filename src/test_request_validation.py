@@ -7,11 +7,12 @@ rather than answered on whichever engine happened to be the default.
 
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_request_validation
 """
+import os
 import unittest
 
 import flaresolverr_service
 from dtos import V1RequestBase
-from flaresolverr_service import _validate_url
+from flaresolverr_service import _validate_max_timeout, _validate_url
 
 
 class UrlSchemeTest(unittest.TestCase):
@@ -101,3 +102,72 @@ class UrlPrefix(unittest.TestCase):
 
     def test_an_uppercase_scheme_is_still_accepted(self):
         self.assertIsNone(_validate_url("HTTPS://example-site.tld/"))
+
+
+class MaxTimeoutTest(unittest.TestCase):
+    """maxTimeout is the whole-request budget, so an unbounded value pins a
+    browser for as long as the caller asks and blocks the reaper behind it."""
+
+    def setUp(self):
+        self.original = os.environ.get('MAX_TIMEOUT_MS')
+        os.environ['MAX_TIMEOUT_MS'] = '180000'
+
+    def tearDown(self):
+        if self.original is None:
+            os.environ.pop('MAX_TIMEOUT_MS', None)
+        else:
+            os.environ['MAX_TIMEOUT_MS'] = self.original
+
+    def request(self, value):
+        req = V1RequestBase({"cmd": "request.get", "url": "https://example.tld/"})
+        req.maxTimeout = value
+        return req
+
+    def test_a_missing_budget_falls_back_to_the_default(self):
+        req = self.request(None)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 60000)
+
+    def test_a_zero_budget_falls_back_to_the_default(self):
+        req = self.request(0)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 60000)
+
+    def test_a_negative_budget_falls_back_to_the_default(self):
+        req = self.request(-5000)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 60000)
+
+    def test_a_budget_under_the_ceiling_is_left_alone(self):
+        req = self.request(90000)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 90000)
+
+    def test_a_budget_at_the_ceiling_is_left_alone(self):
+        req = self.request(180000)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 180000)
+
+    def test_a_budget_over_the_ceiling_is_clamped(self):
+        req = self.request(86400000)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 180000)
+
+    def test_a_numeric_string_budget_still_works(self):
+        req = self.request("90000")
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 90000)
+
+    def test_an_unreadable_budget_is_refused(self):
+        with self.assertRaises(Exception):
+            _validate_max_timeout(self.request("soon"))
+
+    def test_a_boolean_budget_is_refused(self):
+        with self.assertRaises(Exception):
+            _validate_max_timeout(self.request(True))
+
+    def test_a_zero_ceiling_lifts_the_clamp(self):
+        os.environ['MAX_TIMEOUT_MS'] = '0'
+        req = self.request(86400000)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 86400000)
