@@ -303,9 +303,15 @@ class StealthEngine(Engine):
         with self._sessions_lock:
             ctx = self._sessions.get(session_id)
         if ctx is not None and ttl is not None and ctx.lifetime() > ttl:
-            logging.debug(f"stealth session expired, recreating (session_id={session_id})")
-            self.destroy_session(session_id)
-            ctx = None
+            if ctx.lock.locked():
+                # Recreating closes the browser, and a request is solving on it
+                # right now. Reuse it here; whoever finds it idle recreates it.
+                logging.debug(f"stealth session expired but a request is still on it, "
+                              f"so it is reused (session_id={session_id})")
+            else:
+                logging.debug(f"stealth session expired, recreating (session_id={session_id})")
+                self.destroy_session(session_id)
+                ctx = None
         # (Re)create, tolerating a reaper/cap eviction racing between calls.
         for _ in range(2):
             if ctx is not None:

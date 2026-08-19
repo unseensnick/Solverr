@@ -101,7 +101,12 @@ class SessionsStorage:
 
     def get(self, session_id: str, ttl: Optional[timedelta] = None,
             proxy: Optional[dict] = None) -> Tuple[Session, bool]:
-        """Return the session, creating it with ``proxy`` if it isn't there yet.
+        """Return the session **marked in use**, creating it if it isn't there.
+
+        The caller owns the mark and must pass the session to ``end_use`` when it
+        is done, which is what keeps the reaper and the cap off a live browser.
+        Marking happens here rather than in the caller so nothing can evict the
+        session between handing it out and the request starting on it.
 
         The proxy has to reach both create calls below. Without it a session that
         outlives its TTL comes back on a direct connection, and one named by a
@@ -111,10 +116,21 @@ class SessionsStorage:
         session, fresh = self.create(session_id, proxy)
 
         if ttl is not None and not fresh and session.lifetime() > ttl:
-            logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
-            session, fresh = self.create(session_id, proxy, force_new=True)
+            with self._lock:
+                busy = session.in_use > 0
+            if busy:
+                # Recreating quits the driver, and another request is driving it
+                # right now. Let this request reuse the old browser; the next one
+                # to find it idle does the recreation.
+                logging.debug(f'session\'s lifetime has expired but a request is still on it, '
+                              f'so it is reused (session_id={session_id})')
+            else:
+                logging.debug(f'session\'s lifetime has expired, so the session is recreated (session_id={session_id})')
+                session, fresh = self.create(session_id, proxy, force_new=True)
 
-        session.last_used = datetime.now()
+        with self._lock:
+            session.last_used = datetime.now()
+            session.in_use += 1
         return session, fresh
 
     def touch(self, session_id: str) -> None:
@@ -123,12 +139,8 @@ class SessionsStorage:
         if session is not None:
             session.last_used = datetime.now()
 
-    def begin_use(self, session: Session) -> None:
-        """Mark a session as solving, so the reaper leaves its browser alone."""
-        with self._lock:
-            session.in_use += 1
-
     def end_use(self, session: Session) -> None:
+        """Release the mark ``get`` took, so the session can be reaped again."""
         with self._lock:
             session.in_use = max(0, session.in_use - 1)
 

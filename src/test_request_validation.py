@@ -1,12 +1,16 @@
 """Browser-free tests for the /v1 request boundary.
 
 The service has no auth, so the scheme check is what stops a reachable port from
-being used to read local files through the browser.
+being used to read local files through the browser. The engine check is the other
+half of the boundary: a value the service does not understand has to be refused
+rather than answered on whichever engine happened to be the default.
 
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_request_validation
 """
 import unittest
 
+import flaresolverr_service
+from dtos import V1RequestBase
 from flaresolverr_service import _validate_url
 
 
@@ -37,3 +41,22 @@ class UrlSchemeTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class EngineSelection(unittest.TestCase):
+    """An engine the service does not have is an error, not a silent default."""
+
+    def test_a_misspelled_engine_is_rejected(self):
+        req = V1RequestBase({"url": "https://example-site.tld/", "engine": "stelth"})
+
+        with self.assertRaises(Exception) as caught:
+            flaresolverr_service._engine_plan(req)
+
+        self.assertIn("is invalid", str(caught.exception))
+
+    def test_auto_still_means_let_the_service_choose(self):
+        req = V1RequestBase({"url": "https://example-site.tld/", "engine": "auto"})
+
+        order, _ = flaresolverr_service._engine_plan(req)
+
+        self.assertTrue(order)

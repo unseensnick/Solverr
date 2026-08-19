@@ -41,16 +41,15 @@ class ChromeEngine(Engine):
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
         driver = None
-        # Held only while this request is solving, so the reaper cannot quit the
-        # browser under it. Released in the finally below, which runs in this
-        # thread and so survives func_timeout stopping the worker.
+        # get() hands the session over already marked in use, so nothing can quit
+        # the browser under this request. Released in the finally below, which
+        # runs in this thread and so survives func_timeout stopping the worker.
         in_use = None
         try:
             if req.session:
                 session_id = req.session
                 ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
                 session, fresh = self._sessions.get(session_id, ttl, req.proxy)
-                self._sessions.begin_use(session)
                 in_use = session
 
                 if fresh:

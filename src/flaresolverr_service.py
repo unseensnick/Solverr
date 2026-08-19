@@ -171,7 +171,7 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
 def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
     logging.debug("Creating new session...")
 
-    engine = (req.engine or config.default_engine()).lower()
+    engine = _validate_engine(req.engine) or config.default_engine().lower()
     if engine == 'stealth':
         if STEALTH_ENGINE is None:
             raise Exception("Stealth engine is not available (STEALTH_ENGINE disabled or dependencies missing).")
@@ -259,6 +259,19 @@ def _validate_url(url) -> None:
         raise Exception("Request parameter 'url' must be an 'http://' or 'https://' URL.")
 
 
+def _validate_engine(engine) -> str:
+    """The requested engine lower-cased, or '' when unset. Raises on anything else.
+
+    A misspelled name used to fall through to the default engine, so a caller
+    that meant to pin one got an answer from the other and never found out.
+    """
+    forced = (engine or '').strip().lower()
+    if forced in ('', 'auto', 'chrome', 'stealth'):
+        return forced
+    raise Exception(f"Request parameter 'engine' = '{engine}' is invalid. "
+                    "Use 'chrome', 'stealth', or 'auto'.")
+
+
 def _host_of(req: V1RequestBase):
     try:
         return urlparse(req.url).hostname
@@ -289,7 +302,7 @@ def _engine_plan(req: V1RequestBase):
     """
     available = _available_engines()
 
-    forced = (req.engine or '').strip().lower()
+    forced = _validate_engine(req.engine)
     if forced in ('chrome', 'stealth'):
         if forced not in available:
             raise Exception(f"Requested engine '{forced}' is not available.")
