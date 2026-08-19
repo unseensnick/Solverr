@@ -317,10 +317,15 @@ def start():
         logging.info("  allowed hosts: %s (default: %s)", ", ".join(hosts), _DEFAULT_HOST)
     else:
         logging.warning("  PASSTHROUGH_ALLOWED_HOSTS is empty; every request is refused (403)")
-    logging.info("  cache ttl: %ds (max %s), request timeout: %dms",
-                 _CACHE_TTL,
-                 f"{_CACHE_MAX_BYTES // (1024 * 1024)} MB" if _CACHE_MAX_BYTES > 0 else "unbounded",
-                 _TIMEOUT_MS)
+    if _CACHE_MAX_BYTES <= 0:
+        cap = "unbounded"
+    elif _CACHE_MAX_BYTES >= 1024 * 1024:
+        cap = f"{_CACHE_MAX_BYTES // (1024 * 1024)} MB"
+    else:
+        # Reporting a sub-megabyte cap in whole MB rounds it to "0 MB", which
+        # reads as caching being off rather than tight.
+        cap = f"{_CACHE_MAX_BYTES} bytes"
+    logging.info("  cache ttl: %ds (max %s), request timeout: %dms", _CACHE_TTL, cap, _TIMEOUT_MS)
 
     server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True, name="passthrough").start()
