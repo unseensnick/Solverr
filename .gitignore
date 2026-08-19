@@ -134,3 +134,6 @@ Handoff.md
 
 # Local extension to the naming rule (never tracked: it would publish the names)
 .githooks/deny-names.local
+
+# Worktrees the port loop creates, one per issue it works
+.worktrees/

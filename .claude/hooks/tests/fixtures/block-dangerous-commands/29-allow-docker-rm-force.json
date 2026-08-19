@@ -1,0 +1,5 @@
+{
+  "name": "allow docker rm -f of a loop container",
+  "stdin": { "tool_input": { "command": "docker rm -f solverr-loop12 && docker rmi solverr:loop12" } },
+  "expect_exit": 0
+}

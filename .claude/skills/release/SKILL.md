@@ -54,7 +54,7 @@ If the push is not a fast-forward, stop. Do not force. Report the divergence.
 
 ## Step 5: Verify the publication
 
-`gh` resolves the repo from git remotes, and this repo has an `upstream` remote pointing at FlareSolverr, so **always pass `-R unseensnick/Solverr` explicitly**. Without it you will read the upstream project's workflow runs and conclude, wrongly, that nothing triggered.
+`gh` resolves the repo from git remotes, so **keep passing `-R unseensnick/Solverr` explicitly**. `origin` is the only remote now, but a re-added FlareSolverr remote would silently point every read at the upstream project's workflow runs, and the failure mode is concluding that nothing triggered.
 
 1. `gh run list -R unseensnick/Solverr --limit 4`: both `Release` and `Docker release` should appear on the new tag.
 2. Wait out the Docker build with `gh run watch <id> -R unseensnick/Solverr --exit-status`. It is a multi-arch build and takes a while.

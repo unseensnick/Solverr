@@ -39,12 +39,16 @@ uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a b
 - `src/detection.py` (shared challenge/title/selector lists), `src/geo.py` (browser timezone for both engines), `src/config.py` (env), `src/postform.py`, `src/dtos.py`.
 - `.claude/rules/workflow.md` — CHANGELOG + commit rules, release-cut, public-facing naming, git hooks. `code-quality.md` — coding principles. `security.md` / `error-handling.md` — path-scoped to `src/`. `plan-output.md` — how a findings report or plan is structured. `prose-style.md` — sentence-level writing for every output.
 - `docs/dev/upstream-sync.md` — what has been taken from FlareSolverr and Byparr, through which commit, and every deliberate divergence with its reasoning. Read it before calling something drift.
+- `docs/dev/loops.md` — the port loop's contract: what the manager and worker each own, what they may not do, the three verification gates, and the eligibility rules that keep the worker away from the engines.
 - `.githooks/` — tracked commit-msg and pre-commit hooks. Activate with `git config core.hooksPath .githooks`.
 
 ## Skills
 
 - `/scout` — investigate one non-trivial task, then produce its plan, grounded in `file:line` citations. Use before porting from an upstream or touching the engines, sessions, or the controller.
 - `/upstream-audit` — compare against FlareSolverr and Byparr, classify every difference as covered, missing, or deliberate, and check `/v1` compatibility. Updates the sync ledger.
+- `/port-scan` — manager for the upstream port loop. Triages new Byparr and FlareSolverr commits into labeled issues. No file-writing tools by design. `--dry-run` files nothing.
+- `/audit-scan` — manager for the audit and bug-fix loop. Audits one dimension per run and files only findings that survived an attempt to refute them. Same containment. `--dry-run` files nothing.
+- `/loop-work` — the worker both managers feed. Takes one `loop:ready` issue, works it in its own worktree and branch, fixes every site the issue lists, proves it with three gates, opens a draft PR. Never merges. `--dry-run` mutates nothing.
 - `/live-check` — verify a change against live challenges through an isolated container. The unit tests cannot tell you whether a page still clears; this can.
 - `/release` — cut a version end to end: decide the bump, preflight, tag, then verify the workflows and the published image digests.
 - `/session-handoff` — rewrite `Handoff.md` from verified state, then bring the CHANGELOG, dependent docs, and memory store in line with it.

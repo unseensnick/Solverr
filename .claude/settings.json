@@ -15,7 +15,16 @@
       "Bash(docker logs *)",
       "Bash(docker ps *)",
       "Bash(docker images *)",
+      "Bash(docker run *)",
+      "Bash(docker exec *)",
+      "Bash(docker rm *)",
+      "Bash(docker rmi *)",
+      "Bash(docker network *)",
       "Bash(curl *localhost:8191*)",
+      "Bash(curl *localhost:8291*)",
+      "Bash(curl *localhost:8391*)",
+      "Bash(curl *localhost:8988*)",
+      "Bash(curl *localhost:9796*)",
       "Bash(git status)",
       "Bash(git diff *)",
       "Bash(git log *)",
@@ -32,6 +41,10 @@
       "Bash(git rev-parse *)",
       "Bash(git show *)",
       "Bash(git ls-files *)",
+      "Bash(git worktree *)",
+      "Bash(git push origin loop/*)",
+      "Bash(git push -u origin loop/*)",
+      "Bash(gh label *)",
       "Bash(docker manifest inspect *)",
       "Bash(gh release view *)"
     ],
@@ -83,7 +96,7 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",

@@ -1,0 +1,6 @@
+{
+  "name": "block push to main when chained after a PowerShell Set-Location",
+  "stdin": { "tool_input": { "command": "cd E:\\Code\\cloudflare-bypasses\\Solverr; git push origin main" } },
+  "expect_exit": 2,
+  "expect_stdout_contains": ["deny", "main"]
+}
