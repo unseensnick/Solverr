@@ -4,8 +4,8 @@
 
 Solverr is a proxy server to bypass Cloudflare and DDoS-GUARD protection. It fuses the two best open-source solvers into one service and switches between them automatically, so you get reliable solving **and** coverage of the newer challenge tiers.
 
-- **Chrome engine** (default) — the original [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) approach: [Selenium](https://www.selenium.dev) + [undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver) driving a real Chromium. Fast, session-capable, and clears most sites.
-- **Stealth engine** — [Byparr](https://github.com/ThePhaseless/Byparr)'s stack: [Camoufox](https://github.com/daijro/camoufox) (an anti-detect Firefox that patches its fingerprint in compiled code) + [playwright-captcha](https://github.com/techinz/playwright-captcha). Clears the newer Cloudflare **Turnstile / Managed Challenges** that headless Chromium gives up on.
+- **Chrome engine** (default): the original [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) approach: [Selenium](https://www.selenium.dev) + [undetected-chromedriver](https://github.com/ultrafunkamsterdam/undetected-chromedriver) driving a real Chromium. Fast, session-capable, and clears most sites.
+- **Stealth engine**: [Byparr](https://github.com/ThePhaseless/Byparr)'s stack: [Camoufox](https://github.com/daijro/camoufox) (an anti-detect Firefox that patches its fingerprint in compiled code) + [playwright-captcha](https://github.com/techinz/playwright-captcha). Clears the newer Cloudflare **Turnstile / Managed Challenges** that headless Chromium gives up on.
 
 It speaks the exact FlareSolverr `/v1` API on port `8191`, so it is a drop-in replacement: existing clients (the *arr stack, manga/novel readers, etc.) work unchanged.
 
@@ -13,9 +13,9 @@ Beyond the two engines, it keeps **[sessions](#sessions--automatic-cleanup)** wa
 
 ## Contents
 
-- **Getting started** — [How it works](#how-it-works) · [Quick start](#quick-start) · [Installation](#installation)
-- **Using it** — [Engines & fallback](#engines--fallback) · [Sessions & cleanup](#sessions--automatic-cleanup) · [API usage](#api-usage) · [Passthrough proxy](#passthrough-proxy)
-- **Reference** — [Configuration](#configuration) · [Proxy & reliability](#proxy--reliability) · [Prometheus exporter](#prometheus-exporter) · [Troubleshooting](#troubleshooting)
+- **Getting started**: [How it works](#how-it-works) · [Quick start](#quick-start) · [Installation](#installation)
+- **Using it**: [Engines & fallback](#engines--fallback) · [Sessions & cleanup](#sessions--automatic-cleanup) · [API usage](#api-usage) · [Passthrough proxy](#passthrough-proxy)
+- **Reference**: [Configuration](#configuration) · [Proxy & reliability](#proxy--reliability) · [Prometheus exporter](#prometheus-exporter) · [Troubleshooting](#troubleshooting)
 
 ## How it works
 
@@ -85,18 +85,19 @@ On a Debian **host**, make sure `libseccomp2` is 2.5.x (`sudo apt-cache policy l
 
 ### From source
 
-For development or unsupported architectures. Requires Python 3.9+ (3.11+ recommended for the vendored undetected-chromedriver; the Docker image uses 3.14), and both browsers if you want both engines:
+For development or unsupported architectures. Needs [uv](https://docs.astral.sh/uv/) and Python 3.14 (the version the image runs), plus both browsers if you want both engines:
 
 ```bash
-# install Python deps (pip, or `uv pip`)
-pip install -r requirements.txt
+# create the environment and install Python deps
+uv venv --python 3.14
+uv pip install -r requirements.txt
 
 # Chrome engine: install Chrome or Chromium (+ Xvfb on Linux)
 # Stealth engine: install Firefox libraries and fetch Camoufox
-playwright install-deps firefox
-python -m invisible_playwright fetch
+uv run --no-project playwright install-deps firefox
+uv run --no-project python -m invisible_playwright fetch
 
-python src/flaresolverr.py
+uv run --no-project python src/flaresolverr.py
 ```
 
 Set `STEALTH_ENGINE=false` to run Chrome-only and skip the Camoufox/Firefox setup entirely.
@@ -126,7 +127,7 @@ Clients often create a session and never destroy it (a mobile app can be killed 
 - closes any session idle longer than `SESSION_TTL_MINUTES` (default 30). Every request bumps the session's last-used time, so an in-use session is never reaped.
 - evicts the oldest-idle session once an engine exceeds `SESSION_MAX` (default 20).
 
-So `sessions.destroy` is good practice but optional — cleanup happens automatically.
+So `sessions.destroy` is good practice but optional: cleanup happens automatically.
 
 ## API usage
 
@@ -232,7 +233,7 @@ Like `request.get`, plus `postData`.
 
 ## Passthrough proxy
 
-Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges — so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
+Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges, so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
 
 The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches.
 
@@ -276,14 +277,14 @@ You don't need a bundled indexer file. Take the site's existing definition from 
    - **Prowlarr**: `/config/Definitions/Custom/`. The `Custom` subfolder often doesn't exist yet, and Prowlarr **ignores** YAMLs placed directly in `Definitions/`, so create `Custom/` and put the file there.
    - **Jackett**: its custom-definitions folder, which Jackett prints in its startup log (commonly `/config/Jackett/Indexers/custom/` on the linuxserver image); create it if missing.
 
-Then add the indexer in the manager, pick a mirror as the **Base URL**, and **do not attach a FlareSolverr/proxy tag** — the passthrough already does the solving, and a proxy tag would route around it. Everything else in the definition (search paths, selectors, categories) stays untouched.
+Then add the indexer in the manager, pick a mirror as the **Base URL**, and **do not attach a FlareSolverr/proxy tag**: the passthrough already does the solving, and a proxy tag would route around it. Everything else in the definition (search paths, selectors, categories) stays untouched.
 
 > **Grab the definition as a file, not via copy-paste.** A few definitions contain non-printable characters in their filters (a rare title-cleanup step); pasting through a chat or some editors silently strips them and breaks parsing ("No title provided" on every result). Download the raw file so the bytes stay intact.
 
 Notes and limits:
 
 - **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
-- Encode the mirror as a **bare host** (`example-site.tld`), not `https://…` — clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
+- Encode the mirror as a **bare host** (`example-site.tld`), not `https://…`, because clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
 - Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
 - The cache holds at most `PASSTHROUGH_CACHE_MAX_BYTES` in total. The TTL alone bounded how long a body was kept but not how much was kept, so a client walking many pages inside one TTL window could hold all of them at once.
 - It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
@@ -404,7 +405,7 @@ If the exit IP can't be reached, Solverr falls back to the container's `TZ` for 
 
 ## Proxy & reliability
 
-No solver beats Cloudflare by fingerprint alone — **IP reputation dominates**. A datacenter/VPS IP fails far more challenges than a residential one. If a site keeps failing on **both** engines, the single most effective fix is a residential proxy: set `PROXY_URL` (and credentials), or pass `proxy` per request/session.
+No solver beats Cloudflare by fingerprint alone: **IP reputation dominates**. A datacenter/VPS IP fails far more challenges than a residential one. If a site keeps failing on **both** engines, the single most effective fix is a residential proxy: set `PROXY_URL` (and credentials), or pass `proxy` per request/session.
 
 Rough guide to expected latency: Chrome solves take a few seconds; Camoufox solves take ~10–20 s (the price of clearing challenges Chromium can't). Session reuse brings follow-ups on the same host down to ~1–3 s.
 
@@ -416,13 +417,17 @@ The domain label is capped at 100 distinct hosts; every host after that is repor
 
 ## Troubleshooting
 
-**A source shows no results but the log says `Challenge not detected!` with a 200.** An engine loaded the page but couldn't recognise a newer managed/Turnstile challenge and returned it as if solved. Solverr's auto-fallback is designed to catch this and retry on the other engine; make sure `ENGINE_FALLBACK` is on and the stealth engine is enabled. If it still fails, the site is likely gating on your IP — add a residential proxy.
+**A source shows no results but the log says `Challenge not detected!` with a 200.** An engine loaded the page but couldn't recognise a newer managed/Turnstile challenge and returned it as if solved. Solverr's auto-fallback is designed to catch this and retry on the other engine; make sure `ENGINE_FALLBACK` is on and the stealth engine is enabled. If it still fails, the site is likely gating on your IP, so add a residential proxy.
 
 **Out-of-memory / browser launch errors (Proxmox LXC, low-RAM hosts).** Give the container more shared memory: `shm_size: 512mb` in `docker-compose.yml` (or `--shm-size=512m`). Reduce `SESSION_MAX` and keep `SESSION_TTL_MINUTES` modest so idle browsers are freed sooner.
 
 **Camoufox / Firefox errors on ARM or NAS devices.** Stealth-engine support on ARM/NAS is best-effort. If it won't launch, set `STEALTH_ENGINE=false` to run Chrome-only.
 
 **Cloudflare has blocked this request / IP banned.** Your IP is flagged for that site. Try a (residential) proxy, or open the site in a normal browser from the same network to confirm.
+
+## Contributing
+
+Bug reports and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request: it covers the setup, the tests, and the commit message standard that CI checks every commit against. Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
