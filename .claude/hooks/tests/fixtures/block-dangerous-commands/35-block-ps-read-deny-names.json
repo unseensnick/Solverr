@@ -1,0 +1,6 @@
+{
+  "name": "block reading the local deny list through PowerShell",
+  "stdin": { "tool_name": "PowerShell", "tool_input": { "command": "Get-Content .githooks/deny-names.local" } },
+  "expect_exit": 2,
+  "expect_stdout_contains": ["deny", "secret"]
+}

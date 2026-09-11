@@ -1,0 +1,5 @@
+{
+  "name": "allow a /dev/null redirect followed by another command",
+  "stdin": { "tool_input": { "command": "ls >/dev/null; echo done" } },
+  "expect_exit": 0
+}

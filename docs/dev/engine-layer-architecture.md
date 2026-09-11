@@ -246,11 +246,11 @@ copy cannot drift from the law.
   `Reactor` that ships alongside it is deliberately not used, since it starts a polling thread per
   driver. Three caveats bound the work: the capability is set at driver creation so it is a config
   decision rather than a per-request one, the log must be drained per request or it grows on a
-  long-lived session, and it needs a fingerprint A/B before shipping because it is on by default.
-- **Identity is a sealed `SessionRef`, not a bare id string.** The two pools can hold the same id and
-  `_cmd_sessions_list` already deduplicates them at runtime, which is the symptom. A bare string
-  cannot express which engine owns a session, so the wrong-pool lookup stays constructible until the
-  type says otherwise.
+  long-lived session, and it needs a fingerprint A/B before it could ever be on by default. It
+  shipped off by default for that reason.
+- **Identity stays a bare id string.** A sealed `SessionRef` was proposed because the two pools can
+  hold the same id, and dropped once measured: the `/v1` contract has clients send a bare id, and
+  resolving which engine holds one is the controller's job. Step 5 above records the full reason.
 - **The conformance suite is the pin, and the spine is the kernel.** Both rungs of the ladder are
   available here because the codebase is small enough, so an unpinned twin should not exist at all.
 - **Sequencing puts characterisation second, not last.** `/live-check` is user-invoked and takes tens

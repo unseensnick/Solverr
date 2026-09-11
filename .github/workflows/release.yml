@@ -33,7 +33,7 @@ jobs:
     name: Create release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -47,7 +47,7 @@ jobs:
           fi
 
       - name: Install parse-changelog
-        uses: taiki-e/install-action@parse-changelog
+        uses: taiki-e/install-action@ffe3fd350e607ed6df4dd1765629bcc24853038a # parse-changelog
 
       - name: Prepare release body
         env:
@@ -79,7 +79,7 @@ jobs:
           } > release_body.md
 
       - name: Create release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
           name: Solverr ${{ steps.vars.outputs.tag }}

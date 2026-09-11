@@ -24,9 +24,10 @@ Solverr has two upstreams and owes both a mergeable diff. The ledger
 - **The stealth clearing core is Byparr's.** It shares Byparr's algorithm and its widget constants by
   name and role (`ANCESTOR_DEPTHS`, `MIN_WIDTH`, `MIN_HEIGHT`, `MAX_HEIGHT`, `COOLDOWN`), and the
   ledger's Taken section records four separate ports into it.
-- **Everything wrapped around those cores is ours, and it is written twice.** Request-option
-  handling, session lifecycle and result assembly are each implemented once per engine. That is
-  where the duplication lives, and it is ordinary duplication with no exemption.
+- **Everything wrapped around those cores is ours.** Request-option handling, session lifecycle and
+  result assembly used to be implemented once per engine, which is where the same defect kept
+  landing twice. They now live once in the spine (the seam-depth table below); what stays per
+  engine is each adapter, and duplication there is ordinary duplication with no exemption.
 
 **The line runs inside each engine, not between them.** The two cores are two mechanisms, not two
 implementations of one rule, so collapsing them would fork both engines from their upstream and buy
@@ -57,13 +58,22 @@ nothing.
   recorded in the ledger. "The engines are structured differently", "the other side needs a rewrite
   first" and "no caller needs it yet" are not exits, they are the work. If the second half cannot
   ship in the same commit, the change goes back to planning as one item covering both.
+- **What a clearing core owns alone falls under the clearing-core decline, not write-once.** A
+  tuning knob that only parameterizes one core's own loop (`BROWSER_WAIT_TIMEOUT`, Chrome's
+  per-attempt wait) has nothing to tune on the other engine, and a dependency only one engine uses
+  (Playwright and invisible-playwright for stealth, Selenium for Chrome) moves with a live check
+  rather than a second-engine half. Both are documented as engine-specific and recorded in the
+  ledger, never silent. The moment either changes what a client can observe, write-once applies.
 - **Sharing the implementation is a means, not the rule.** Declining a code collapse stays allowed
   on cited mechanism grounds (the two clearing cores are the standing example), and it never
   licenses a behaviour fork. Two implementations that must behave identically are pinned by one
   conformance test.
 - **Divergent bits are typed capability slots.** Never a nullable field, never a boolean-flag
   combination, never a per-engine branch inside shared code. A capability an engine cannot support
-  is routed to one that can, or refused by name. Never a silent no-op: `tabs_till_verify` quietly
+  is routed to one that can, or refused by name. One boolean the spine takes from each adapter is
+  not a combination and is allowed while it is the only divergent bit on its surface
+  (`turnstile_is_a_challenge` on `pipeline.verdict`); a second one on the same surface turns both
+  into one typed capability. Never a silent no-op: `tabs_till_verify` quietly
   doing nothing on the stealth engine is the defect this rule exists to stop.
 - **A shared component either derives a piece of state or does not own it.** Sharing the storage
   while each engine interprets it its own way is a fork wearing shared-code clothing, and nobody
@@ -74,7 +84,9 @@ nothing.
   conformance rung is `src/test_engine_conformance.py`, driven by `src/engine_fakes.py`; add to it
   rather than writing a second per-engine test, and delete the per-engine test it supersedes.
 - **Parity is the default; a gap needs a ruling to stay open.** A gap you notice on a surface you are
-  touching is levelled up in that change unless the owner gates it.
+  touching is levelled up in that change unless the owner gates it. A gate is the owner's ruling
+  and is never self-issued by whoever is doing the work. A gap that predates this rule is paid
+  when its surface is next touched, never in a sweep of its own.
 - **A decline expires with its evidence.** Record the premise with the decline and treat the decline
   as void once that premise changes.
 - **Verify by mutation.** A new test is not done until the production clause it names has been

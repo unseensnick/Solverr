@@ -1,0 +1,32 @@
+# Runs the browser-free suite on every pull request and every push to main. It needs no browser
+# and takes seconds. Whether a page still clears a real challenge is outside what it can see; that
+# is the live check's job before a release.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Browser-free suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -r requirements.txt -r test-requirements.txt
+
+      - name: Run the suite
+        run: PYTHONPATH=src uv run --no-project python -m unittest discover -s src -p 'test_*.py' -t src

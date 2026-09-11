@@ -43,6 +43,9 @@ contains_cmd() { printf '%s' "$COMMAND" | grep -qE "$1"; }
 contains_icmd() { printf '%s' "$COMMAND" | grep -qiE "$1"; }
 
 # ── Git push protections ────────────────────────────────────────────────
+# The session's cwd, which is where the command actually runs. The hook's own cwd is always the
+# project dir, so without this a push from a worktree is judged by the main tree's branch.
+SESSION_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)
 if contains_cmd '(^|[;&|()]+[[:space:]]*)git[[:space:]]+push'; then
   # Explicit refspec to a protected branch (origin main, :main, HEAD:main, remote branch)
   if contains_cmd "git[[:space:]]+push[[:space:]]+[^[:space:]]+[[:space:]]+([^[:space:]]*:)?($BR_REGEX)(\$|[[:space:]])"; then
@@ -55,7 +58,7 @@ if contains_cmd '(^|[;&|()]+[[:space:]]*)git[[:space:]]+push'; then
   fi
   # Bare `git push` while on protected branch
   if contains_cmd 'git[[:space:]]+push[[:space:]]*($|[;&|])'; then
-    CURRENT=$(git branch --show-current 2>/dev/null || true)
+    CURRENT=$(git -C "${SESSION_CWD:-.}" branch --show-current 2>/dev/null || git branch --show-current 2>/dev/null || true)
     if [ -n "$CURRENT" ] && printf '%s' ",$PROTECTED_BRANCHES," | grep -q ",$CURRENT,"; then
       emit_deny "Blocked: you are on '$CURRENT' (a protected branch). Switch to a feature branch."
     fi
@@ -65,6 +68,16 @@ if contains_cmd '(^|[;&|()]+[[:space:]]*)git[[:space:]]+push'; then
      && ! contains_cmd '\-\-force-with-lease'; then
     emit_deny "Blocked: force push is not allowed. Use --force-with-lease if you must overwrite remote."
   fi
+fi
+
+# ── Merging is never the agent's call ───────────────────────────────────
+# Every PR is merged by a person, with a merge commit. To GitHub a PR merge is a legitimate
+# action, so no ruleset can express this; the matcher here is the only guard.
+if contains_cmd '(^|[;&|()]+[[:space:]]*)gh[[:space:]]+pr[[:space:]]+merge'; then
+  emit_deny "Blocked: merging a PR is the owner's call. Open the PR and stop."
+fi
+if contains_cmd 'gh[[:space:]]+api[^;&|]*pulls/[0-9]+/merge'; then
+  emit_deny "Blocked: merging a PR through the API is the owner's call. Open the PR and stop."
 fi
 
 # ── Destructive filesystem operations ───────────────────────────────────
@@ -77,6 +90,19 @@ fi
 # rm -rf /usr, /etc, /var, /bin, etc.
 if printf '%s' "$CMD_NOQUOTE" | grep -qE 'rm[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*-?[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*[[:space:]]+/(usr|etc|var|bin|sbin|lib|opt|root|boot)([[:space:]/]|$)'; then
   emit_deny "Blocked: recursive delete targeting a system directory."
+fi
+
+# ── Secret files are never read through the shell ───────────────────────
+# The permissions deny list covers the Read, Write and Edit tools only, and auto mode routes file
+# reads through the shell instead, so `cat .env` walks straight past it. Only this hook sees the
+# command text. The reader must sit in command position (line start or after an operator):
+# several reader names are ordinary English words, and matching them mid-sentence rejected
+# commit messages.
+SECRET_READERS='cat|head|tail|sed|awk|grep|rg|less|more|strings|xxd|od|base64|cp|mv|scp|curl|type|gc|Get-Content|Select-String|Copy-Item'
+SECRET_TARGETS='(^|[[:space:]=/\\])\.env([[:space:]./]|$)|\.(pem|key|p12|pfx|jks|keystore)([[:space:]]|$)|(^|[[:space:]=/\\])secrets[/\\]|id_rsa|deny-names\.local'
+if printf '%s' "$CMD_NOQUOTE" | grep -qiE "(^|[;&|(])[[:space:]]*($SECRET_READERS)[[:space:]]" \
+   && printf '%s' "$CMD_NOQUOTE" | grep -qE "$SECRET_TARGETS"; then
+  emit_deny "Blocked: that reads a secret file (a .env, a key or certificate, secrets/, or the local deny list). Open it yourself if you need its contents."
 fi
 
 # ── PowerShell destructive operations ───────────────────────────────────
@@ -152,9 +178,11 @@ fi
 
 # Disk / partition. Note: only REDIRECTIONS to /dev/ are destructive. `2>/dev/null` is not.
 # Pattern matches: `>[ ]*/dev/<something>` but NOT `2>/dev/null` or `&>/dev/null` style for fd-null.
-# Strategy: match `>` optionally with whitespace, followed by /dev/<name>, EXCLUDING /dev/null and /dev/stderr/stdout.
-if printf '%s' "$COMMAND" | grep -qE '(^|[^0-9&])>[[:space:]]*/dev/[a-zA-Z][a-zA-Z0-9]*' \
-   && ! printf '%s' "$COMMAND" | grep -qE '>[[:space:]]*/dev/(null|stdout|stderr|tty|zero|random|urandom)([[:space:]]|$)' ; then
+# Strategy: delete the harmless redirects first, then match `>` followed by /dev/<name> on what is
+# left. Excluding them on the whole command failed both ways: `>/dev/null;` read as unsafe because
+# the exclusion wanted whitespace after it, and one safe redirect cleared a dangerous one later on.
+CMD_SANS_SAFE=$(printf '%s' "$COMMAND" | sed -E 's#>[[:space:]]*/dev/(null|stdout|stderr|tty|zero|random|urandom)##g')
+if printf '%s' "$CMD_SANS_SAFE" | grep -qE '(^|[^0-9&])>[[:space:]]*/dev/[a-zA-Z][a-zA-Z0-9]*' ; then
   emit_deny "Blocked: redirection into a raw device file can destroy data."
 fi
 if contains_cmd '(^|[;&|[:space:]])(mkfs|mkfs\.[a-z0-9]+)([[:space:]]|$)' \

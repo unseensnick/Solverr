@@ -22,9 +22,10 @@ echo "$subject" | grep -qE '^(feat|fix|docs|chore|refactor|test|perf|build|ci|st
 # 3) No em dash anywhere in the message
 echo "$msg" | grep -q '—' && errors+=("contains an em dash; use commas, parentheses, periods, or colons")
 
-# 4) No AI watermark
-echo "$msg" | grep -qiE 'co-authored-by|generated with|claude\.ai/code|🤖' \
-  && errors+=("contains an AI watermark (Co-Authored-By / Generated with / robot emoji)")
+# 4) No AI watermark. A Co-authored-by trailer naming a person is credit and passes; one
+#    naming an AI tool is a watermark.
+echo "$msg" | grep -qiE 'co-authored-by:.*(claude|anthropic|openai|chatgpt|copilot|gemini|cursoragent)|generated with|claude\.ai/code|🤖' \
+  && errors+=("contains an AI watermark (an AI Co-authored-by trailer / Generated with / robot emoji)")
 
 # 5) No BARE '#<number>' reference: it links to an issue in THIS repo, which is rarely what was meant.
 #    Strip explicit owner/repo#N first (FlareSolverr/FlareSolverr#1626), then flag what remains.

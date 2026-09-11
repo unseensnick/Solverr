@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Solverr docs enforcement (see .claude/rules/workflow.md: "CHANGELOG" and "Public-facing naming").
-# Lints staged CHANGELOG.md and README.md:
+# Lints staged CHANGELOG.md, README.md, CONTRIBUTING.md and CLAUDE.md:
 #   both     - no target-site names or scraping vocabulary in newly added lines, no em dash.
 #   CHANGELOG - every new [Unreleased] entry under Additions / Changes / Fixes leads with a
 #               self-contained bold headline ending in . ! or ? (Other is exempt).
@@ -29,7 +29,7 @@ name_patterns='(^|[^A-Za-z0-9./@-])[a-z0-9][a-z0-9-]{1,}\.(to|st|se|nl|cc|ws|eu|
 local_deny="$(dirname "$0")/deny-names.local"
 [ -f "$local_deny" ] && name_patterns="$name_patterns|$(paste -sd'|' "$local_deny")"
 
-for f in CHANGELOG.md README.md; do
+for f in CHANGELOG.md README.md CONTRIBUTING.md CLAUDE.md; do
   staged "$f" || continue
   new=$(added "$f")
   [ -n "$new" ] || continue

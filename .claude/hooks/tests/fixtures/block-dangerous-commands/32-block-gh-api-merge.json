@@ -1,0 +1,6 @@
+{
+  "name": "block a PR merge through gh api",
+  "stdin": { "tool_input": { "command": "gh api -X PUT repos/owner/repo/pulls/11/merge" } },
+  "expect_exit": 2,
+  "expect_stdout_contains": ["deny", "merg"]
+}

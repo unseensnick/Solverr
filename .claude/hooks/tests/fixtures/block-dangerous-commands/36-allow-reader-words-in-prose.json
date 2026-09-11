@@ -1,0 +1,5 @@
+{
+  "name": "allow a commit message that uses reader verbs as words",
+  "stdin": { "tool_input": { "command": "git commit -m \"docs: say how head and tail of the .env example are read\"" } },
+  "expect_exit": 0
+}
