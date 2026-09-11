@@ -1,0 +1,14 @@
+# Text is stored and checked out with LF on every platform. The git hooks and the
+# .claude/hooks scripts run under bash, which breaks on CRLF, and both upstreams are LF, so a
+# CRLF working copy made every line differ when diffing against them.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pyc binary
+*.gz binary
+*.zip binary
+*.mmdb binary
