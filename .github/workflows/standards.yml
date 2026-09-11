@@ -54,6 +54,10 @@ jobs:
       - name: Hook self-test
         run: bash .githooks/tests/run.sh
 
+      # The Claude Code guards are regexes too, and they fail the same silent way.
+      - name: Claude Code hook guards
+        run: bash .claude/hooks/tests/run-all.sh
+
       - name: Commit messages
         env:
           BASE: ${{ steps.range.outputs.base }}
