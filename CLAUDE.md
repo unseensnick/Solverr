@@ -7,58 +7,64 @@ FlareSolverr fork with two solving engines and automatic fallback. Cloudflare/DD
 ```bash
 docker compose up -d --build         # build + run (image bundles both browsers, ~2.3 GB)
 docker logs -f solverr               # logs (set LOG_LEVEL=debug for more)
+PYTHONPATH=src uv run --no-project python -m unittest discover -s src -p 'test_*.py' -t src   # browser-free suite, seconds; CI runs it
+bash .githooks/tests/run.sh          # the git hooks still reject what they claim to
+bash .claude/hooks/tests/run-all.sh  # the Claude Code guard hooks, against their fixtures
 uv run --no-project python -m py_compile src/*.py src/engines/*.py   # quick compile check
-uv run python -m unittest src.tests  # test suite (unittest + webtest; needs a browser)
 ```
 
-## Architecture (non-obvious)
+Python only through uv; there is no system Python. `src/tests.py` is upstream's suite: it needs a real browser and live sites. Whether a page still clears a real challenge is `/live-check`, never the unit tests.
 
-- Two engines behind one interface (`engines/base.py`): `chrome` (Selenium + vendored undetected_chromedriver, the default) and `stealth` (Camoufox via invisible_playwright + playwright-captcha). The controller auto-falls-back between them and remembers per-host which one cleared it.
-- The stealth engine is async Playwright running on ONE background event-loop thread (`async_runtime.py`); persistent Camoufox contexts (sessions) live there so their cookies survive across requests. The server itself is synchronous.
-- Sessions: each engine keeps its own pool, both using one `SessionStore` (`sessions.py`) so the lifecycle rules exist once; a background reaper (`session_reaper.py`) closes idle browsers. A session handed out is marked in use under the same lock that found it, which is what keeps the reaper and the cap off a live browser. Solve once, reuse the cookie many times.
-- Escalation ladder for an `auto` request: Chrome → Camoufox click-solve → (optional, dormant) paid CAPTCHA API.
-- **A Turnstile checkbox is clicked by coordinate, with no JS evaluation.** The widget's iframe sits in a closed shadow root, so `query_selector` cannot find it, but `page.frames` lists it anyway; `frame_element().bounding_box()` gives its rect and `page.mouse` clicks the checkbox. This exists because playwright-captcha's shadow-root traversal uses `evaluate_handle`, and the iframe's CSP blocks eval under Firefox, which silently broke widget solving. Cloudflare's own interstitial builds the widget itself and its frame reports an empty URL, so when no frame matches, the rect comes from the nearest ancestor `div` of the token input instead, which is in the light DOM. Do not reach for `page.evaluate` to measure any of this: running page scripts against a live challenge makes Cloudflare reissue it.
-- **A challenge is only over once a clear reading survives a second look.** Cloudflare drops the challenge markup while it issues the next round, so believing the first clear reading returns an intermediate challenge page.
-- **`maxTimeout` is one budget for the whole request, split evenly across the planned engines.** It used to be handed to each engine in full, so a fallback could take twice as long as asked and trip the caller's own timeout. An even share is what makes the fallback reachable: giving the first engine everything let it spend the lot, and a request that used to succeed in 133s failed at 120s with the second engine skipped. A quick first engine costs the fallback nothing, since the fallback inherits everything unspent.
-- **The POST form is carried to the browser as a `data:text/html,` URL, so its fields are percent-encoded and must stay that way** (`postform.py`). The browser URL-decodes the document before the HTML parser sees it, so a value holding a bare `%` or `#` is otherwise re-read as an escape or truncates the document at the fragment. The `quote()` calls look like double-encoding and are not: removing them breaks POST for those values, measured against a live echo service.
-- **Solverr resolves the browser's timezone and language itself (`geo.py`), and hands both engines the same pair.** Left alone, the stealth stack resolves both from the exit IP on every launch, inside the library, uncached, and raises behind a proxy when the lookup fails, which kills the launch; Chrome derived neither, so the two engines disagreed about the country. Passing concrete values returns before that fatal branch. They travel together because the pairing is what a site checks. Chrome follows via `Emulation.setTimezoneOverride` (which moves its ICU clock rather than patching `Intl` in the page) and `--accept-lang`. A failed lookup falls back to `TZ` and `en-US`: a wrong zone still solves, no browser does not.
-- **playwright-captcha only ever touches a throwaway page**, and only the paid escalation reaches it now. Preparing a solver injects init scripts (one rewrites `Element.prototype.attachShadow`) that a Cloudflare interstitial will not clear while they are present, and Playwright cannot remove an init script. Verified live: an interstitial clears in ~3s without them and never in 40s with them.
+## Working approach
+
+- **Memory and `Handoff.md` are hypotheses, not facts.** A memory that names a function, file or flag is true only if it still exists in current code. When one turns out stale, surface it for pruning instead of acting on it.
+- **Plan steps carry their check inline**, as `1. <step> -> verify: <check>`, so a step nothing can check is visible before it is built.
+- **Reply length.** Default replies are a few sentences: the answer or outcome, the detail that matters, done. A full report is for when the owner asks for one, or for a `/scout` or `/code-research` deliverable, which has its own cap in [.claude/rules/plan-output.md](.claude/rules/plan-output.md).
+
+## Architecture in brief
+
+Two engines behind one interface: `chrome` (Selenium + vendored undetected_chromedriver, the default) and `stealth` (Camoufox via invisible_playwright, on one background event-loop thread). The controller falls back between them and remembers per host which one cleared it. What both engines must do the same way lives once in the shared spine (`assembly.py`, `pipeline.py`, `budget.py`, `sessions.py`); each engine is an adapter over a clearing core derived from its upstream. Several constraints look wrong until you know what they were measured against (the coordinate Turnstile click, no `page.evaluate` against a challenge page, the second look before a challenge counts as cleared, the even `maxTimeout` split, the `quote()` calls in `postform.py`): read [.claude/rules/architecture.md](.claude/rules/architecture.md) before touching any of them. It loads on its own when you work in `src/`.
 
 ## Key decisions (WHY)
 
-- **Fork on FlareSolverr, not Byparr.** FlareSolverr's Chrome engine already clears the target sites and has sessions; Python 3.11 + a vendored undetected_chromedriver let the Camoufox/Playwright stack coexist. Byparr pins Python 3.14, too new for undetected_chromedriver.
+- **Fork on FlareSolverr, not Byparr.** FlareSolverr's Chrome engine already clears the target sites and has sessions, and its vendored undetected_chromedriver lets the Camoufox/Playwright stack run beside it in one Python 3.14 image.
 - **Reliability is dominated by IP reputation, not the tool.** A residential proxy (`PROXY_URL`) is the biggest lever; warm-session cookie reuse is the second.
 - **The consuming client keeps one shared session and never destroys it**, so the server-side reaper is what prevents leaked browsers (especially the heavier Camoufox ones).
 
 ## Where things live
 
-- `src/flaresolverr.py` — entrypoint: logging setup (note the `force=True`), server, reaper start.
-- `src/flaresolverr_service.py` — controller: `/v1` commands, engine selection + fallback, per-host memory, session commands.
-- `src/assembly.py`, `src/pipeline.py`, `src/budget.py` — the shared spine: what a response contains and in what order, the page verdict and the navigate-cookies-reload order, the solve deadline. The first two are sans-io generators (they yield what to read, the engine supplies how) because one engine is synchronous and the other asynchronous; see `.claude/rules/engine-layer.md` before reshaping them.
-- `src/engines/` — `base.py` (Engine + SolveResult), `chrome_engine.py`, `stealth_engine.py`. Each is an adapter over an upstream-derived clearing core, which is the one thing the spine never takes over.
-- `src/async_runtime.py`, `src/session_reaper.py`, `src/sessions.py` — stealth event loop, idle reaper, and the `SessionStore` both engines use (each holds its own instance; the lifecycle rules live once).
-- `src/detection.py` (shared challenge/title/selector lists), `src/geo.py` (browser timezone for both engines), `src/config.py` (env, including `env_proxy`), `src/postform.py`, `src/dtos.py` (request DTOs plus the type validation that makes their annotations binding).
-- `src/engine_fakes.py` — drives either engine browser-free from one neutral `World`, for `test_engine_conformance.py`. Imported, not collected.
-- `.claude/rules/engine-layer.md` — **the law for anything touching an engine**: write-once and its one exit, which code is upstream's and which is ours, capability slots, the pin-once ladder, and how deep the seam goes per surface. Loads every session.
-- `.claude/rules/workflow.md` — CHANGELOG + commit rules, release-cut, public-facing naming, git hooks. `code-quality.md` — coding principles. `security.md` / `error-handling.md` — path-scoped to `src/`. `plan-output.md` — how a findings report or plan is structured. `prose-style.md` — sentence-level writing for every output.
-- `docs/dev/engine-layer-architecture.md` — the rationale behind that law: the divergence measurements against both upstreams, the target seam, the sequencing, and every ruling with the evidence it rests on. Read it before designing anything forward-looking.
-- `docs/dev/upstream-sync.md` — what has been taken from FlareSolverr and Byparr, through which commit, and every deliberate divergence with its reasoning. Read it before calling something drift.
-- `docs/dev/loops.md` — the port loop's contract: what the manager and worker each own, what they may not do, the three verification gates, and the eligibility rules that keep the worker away from the engines.
-- `.githooks/` — tracked commit-msg and pre-commit hooks. Activate with `git config core.hooksPath .githooks`.
+- `src/flaresolverr.py`: entrypoint. Logging setup (note the `force=True`), server, reaper start.
+- `src/flaresolverr_service.py`: controller. `/v1` commands, engine selection and fallback, per-host memory, session commands.
+- `src/assembly.py`, `src/pipeline.py`, `src/budget.py`: the shared spine. What a response contains and in what order, the page verdict and the navigate-cookies-reload order, the solve deadline. The first two are sans-io generators (they yield what to read, the engine supplies how) because one engine is synchronous and the other asynchronous; see `.claude/rules/engine-layer.md` before reshaping them.
+- `src/engines/`: `base.py` (Engine + SolveResult), `chrome_engine.py`, `stealth_engine.py`. Each is an adapter over an upstream-derived clearing core, which is the one thing the spine never takes over.
+- `src/async_runtime.py`, `src/session_reaper.py`, `src/sessions.py`: stealth event loop, idle reaper, and the `SessionStore` both engines use (each holds its own instance; the lifecycle rules live once).
+- `src/detection.py` (shared challenge/title/selector lists), `src/geo.py` (browser timezone and language for both engines), `src/config.py` (env, including `env_proxy`), `src/postform.py`, `src/dtos.py` (request DTOs plus the type validation that makes their annotations binding).
+- `src/engine_fakes.py`: drives either engine browser-free from one neutral `World`, for `test_engine_conformance.py`. Imported, not collected.
+- `.claude/rules/engine-layer.md`: **the law for anything touching an engine**. Write-once and its one exit, which code is upstream's and which is ours, capability slots, the pin-once ladder, and how deep the seam goes per surface. Loads every session.
+- `.claude/rules/architecture.md`: the non-obvious architecture and its measured constraints, path-scoped to `src/`.
+- `.claude/rules/workflow.md`: CHANGELOG and commit rules, merging, release-cut, public-facing naming, the git hooks and every check they run. `code-quality.md`: coding principles. `testing.md`: test rules and commands. `security.md` / `error-handling.md`: path-scoped to `src/`. `plan-output.md`: how a findings report or plan is structured. `prose-style.md`: sentence-level writing for every output.
+- `CONTRIBUTING.md` and `.github/pull_request_template.md`: the same standard, written for outside contributors. Keep them in step with `workflow.md`.
+- `docs/dev/engine-layer-architecture.md`: the rationale behind the law. The divergence measurements against both upstreams, the target seam, the sequencing, and every ruling with the evidence it rests on. Read it before designing anything forward-looking.
+- `docs/dev/upstream-sync.md`: what has been taken from FlareSolverr and Byparr, through which commit, and every deliberate divergence with its reasoning. Read it before calling something drift.
+- `docs/dev/loops.md`: the loops' contract. What the managers and the worker each own, what they may not do, the three verification gates, and the eligibility rules.
+- `.githooks/`: tracked `commit-msg` and `pre-commit` hooks, plus `tests/run.sh`, which proves each rule still rejects a real violation. Activate with `git config core.hooksPath .githooks`. CI runs the same checks (the Standards and Tests workflows).
+- `.claude/hooks/`: the guards that screen tool calls before they run, so an unexplained `Blocked:` message comes from here. `block-dangerous-commands.sh` covers **both Bash and PowerShell** (matching only one lets a command through the other tool) and refuses a push to `main`, a bare force push (`--force-with-lease` is allowed), merging a PR (`gh pr merge` or through `gh api`), reading secret files through the shell, and the usual destructive deletes. Merging is always the owner's call.
+- `.claude/agents/`: the four review subagents to spawn with the `Agent` tool: `code-reviewer`, `doc-reviewer`, `performance-reviewer`, `security-reviewer`. `/pr-review` runs all four in parallel.
 
 ## Skills
 
-- `/scout` — investigate one non-trivial task, then produce its plan, grounded in `file:line` citations. Use before porting from an upstream or touching the engines, sessions, or the controller.
-- `/upstream-audit` — compare against FlareSolverr and Byparr, classify every difference as covered, missing, or deliberate, and check `/v1` compatibility. Updates the sync ledger.
-- `/port-scan` — manager for the upstream port loop. Triages new Byparr and FlareSolverr commits into labeled issues. No file-writing tools by design. `--dry-run` files nothing.
-- `/audit-scan` — manager for the audit and bug-fix loop. Audits one dimension per run and files only findings that survived an attempt to refute them. Same containment. `--dry-run` files nothing.
-- `/loop-work` — the worker both managers feed. Takes one `loop:ready` issue, works it in its own worktree and branch, fixes every site the issue lists, proves it with three gates, opens a draft PR. Never merges. `--dry-run` mutates nothing.
-- `/live-check` — verify a change against live challenges through an isolated container. The unit tests cannot tell you whether a page still clears; this can.
-- `/release` — cut a version end to end: decide the bump, preflight, tag, then verify the workflows and the published image digests.
-- `/session-handoff` — rewrite `Handoff.md` from verified state, then bring the CHANGELOG, dependent docs, and memory store in line with it.
-- `/pr-review` — review changes via the four specialist agents in parallel.
-- `/tighten` — trim verbose docs and WHAT comments without losing vital info. Always plans first.
-- `/context-budget` — what this `.claude/` config costs per turn.
+- `/scout`: investigate one non-trivial task, then produce its plan, grounded in `file:line` citations. Use before porting from an upstream or touching the engines, sessions, or the controller.
+- `/code-research`: fan-out research for a broad question spanning many files. `/scout` is for one concrete task.
+- `/upstream-audit`: compare against FlareSolverr and Byparr, classify every difference as covered, missing, or deliberate, and check `/v1` compatibility and the dependency pins. Proposes the ledger update.
+- `/port-scan`: manager for the upstream port loop. Triages new Byparr and FlareSolverr commits into labeled issues. Writes no files, by rule. `--dry-run` files nothing.
+- `/audit-scan`: manager for the audit and bug-fix loop. Audits one dimension per run and files only findings that survived independent attempts to refute them. Same containment. `--dry-run` files nothing.
+- `/loop-work`: the worker both managers feed. Takes one `loop:ready` issue, works it in its own worktree and branch, fixes every site the issue lists, proves it with three gates, opens a draft PR. It may change the spine and the adapters; either clearing core always goes to a person. Never merges. `--dry-run` mutates nothing; `--resume <branch>` carries review feedback back into an open loop PR.
+- `/live-check`: verify a change against live challenges through an isolated container. The unit tests cannot tell you whether a page still clears; this can.
+- `/release`: cut a version end to end: decide the bump, preflight, tag, then verify the workflows and the published image digests.
+- `/session-handoff`: rewrite `Handoff.md` from verified state, then bring the CHANGELOG, dependent docs, and memory store in line with it.
+- `/pr-review`: review changes via the four specialist agents in parallel.
+- `/tighten`: trim verbose docs and WHAT comments without losing vital info. Always plans first.
+- `/context-budget`: what this `.claude/` config costs per turn.
 
 ## Don'ts
 

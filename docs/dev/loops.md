@@ -58,9 +58,9 @@ Accountability sits with the person operating this. Every merge is a human decis
 
 The first draft of these rules made `loop:ready` mean "at most one file under `src/`". That is exactly the rule that produces patchwork: it rewards fixing the one call site that made the bug visible and leaving its siblings alone, and it makes a well-understood four-file change ineligible while an unexamined one-file change sails through.
 
-Eligibility is about **how well the scope is known**, never how small it is. Every issue carries a checklist of every affected site with `file:line`, plus the search that produced it, and the worker re-runs that search before calling the code done. Three outcomes are acceptable: fix every site, fix some and list the rest in the PR body with the reason, or escalate. Silence about a site is not one of them.
+Eligibility is about **how well the scope is known**, never how small it is. Every issue carries a checklist of every affected site with `file:line`, plus the search that produced it, and the worker re-runs that search before calling the code done. Three outcomes are acceptable: fix every site, fix some and list the rest in the PR body with the reason, or escalate. Silence about a site is not one of them. An engine pair is the exception to the middle option: a change a client can observe lands for both engines in the same commit, or cites the mechanism one engine genuinely lacks (`.claude/rules/engine-layer.md`), or escalates.
 
-Solverr has two engines written against each other, so a defect in one usually has a twin in the other. That is the single most common way a fix here ends up half done.
+The rules both engines must share now live once in the spine (`src/assembly.py`, `src/pipeline.py`, `src/budget.py`, `src/sessions.py`), so a fix there reaches both from one site. What stays per engine is each adapter and each clearing core, and a fix that lands in one of those and not the other is still the most common way work here ends up half done.
 
 Refactoring is in scope when the correct fix needs it, in the same change, with the reason in the commit body. What stays out is adjacent cleanup nothing in the issue motivates. See `.claude/rules/code-quality.md`.
 
@@ -68,7 +68,7 @@ Refactoring is in scope when the correct fix needs it, in the same change, with 
 
 Cheapest first, so a run fails fast.
 
-**Gate A, the browser-free suite.** 138 tests, no browser, seconds. Pass or fail, no interpretation.
+**Gate A, the browser-free suite.** The whole suite (`unittest discover`, never a hand-picked module list), no browser, seconds. Pass or fail, no interpretation.
 
 **Gate B, the live solve tally.** The one gate that cannot be boolean. Cloudflare's behavior varies with IP reputation, time of day, and how hard a host was hit five minutes ago, so a single result carries no information either way. The worker builds a baseline container off `origin/main` and runs it interleaved with the change, trial for trial, in the same window. Within noise is a pass, clearly worse is a fail, and an ambiguous window opens the PR labeled `needs-live-recheck` with the raw numbers. Asking a person is a valid outcome; a confident verdict off one sample is not.
 
@@ -99,13 +99,13 @@ Dedupe on the `source:` labels, never on the `loop:` ones. Repeated `--label` fl
 
 ## Tripwire zones
 
-`loop:needs-human`, always, whichever manager finds it: the widget measuring and click path in `stealth_engine.py`, the shared `maxTimeout` budget split, the `quote()` calls in `postform.py`, session and reaper lifecycle, `geo.py`, and any dependency pin for the browser stack. `Handoff.md`'s "What failed" section is the list of conclusions a confident agent reaches and gets wrong, so it is also the list of things the worker may not reason about alone.
+`loop:needs-human`, always, whichever manager finds it: either clearing core (the Chrome challenge wait and Turnstile path in `chrome_engine.py`, the stealth clearing loop and the widget measuring and click path in `stealth_engine.py`; `/loop-work` names the functions), the shared `maxTimeout` budget split, the `quote()` calls in `postform.py`, session and reaper lifecycle, `geo.py`, and any dependency pin for the browser stack. `Handoff.md`'s "What failed" section is the list of conclusions a confident agent reaches and gets wrong, so it is also the list of things the worker may not reason about alone.
 
 ## Guards
 
 The worker can write code and push a branch, so the guards around it are worth stating.
 
-`.claude/hooks/block-dangerous-commands.sh` blocks pushes to protected branches, force pushes, and destructive operations. It matches **both** the Bash and the PowerShell tool: matching only Bash left every guard bypassable by rewriting the same command in PowerShell, which is a different tool with a different name and its own spelling for every destructive operation. Fixtures under `.claude/hooks/tests/fixtures/` cover both syntaxes; run them with `bash .claude/hooks/tests/run-all.sh`.
+`.claude/hooks/block-dangerous-commands.sh` blocks pushes to protected branches, force pushes, merging a PR, shell reads of secret files, and destructive operations. It matches **both** the Bash and the PowerShell tool: matching only Bash left every guard bypassable by rewriting the same command in PowerShell, which is a different tool with a different name and its own spelling for every destructive operation. Fixtures under `.claude/hooks/tests/fixtures/` cover both syntaxes; run them with `bash .claude/hooks/tests/run-all.sh`.
 
 The commit-msg and pre-commit hooks are never bypassed. `--no-verify` is not an option the worker has.
 
@@ -135,4 +135,4 @@ Both run locally and only while the machine is on. Gates B and C need Docker and
 
 ## What these loops do not do
 
-They do not merge, release, or decide that a divergence should end. They do not touch the engines without a person in the path. They do not run the paid CAPTCHA escalation, which needs an API key, and they do not cover a Cloudflare-gated PDF, because no such URL has been found. Those stay in the "not covered" section of every PR body the worker writes.
+They do not merge, release, or decide that a divergence should end. They do not touch either clearing core without a person in the path; the spine and the engine adapters are in scope for the worker, subject to the tripwire zones above. They do not run the paid CAPTCHA escalation, which needs an API key, and they do not cover a Cloudflare-gated PDF, because no such URL has been found. Those stay in the "not covered" section of every PR body the worker writes.

@@ -57,7 +57,7 @@ CI checks every commit in a pull request with [.githooks/commit-msg](.githooks/c
 - **No em dash anywhere in the message.** Use commas, parentheses, periods, or colons.
 - **No bare `#123`.** It silently links to an issue in this repository. Write `owner/repo#123` instead, for example `FlareSolverr/FlareSolverr#1626`.
 - **No AI attribution.** No `Co-authored-by` trailer naming an AI tool and no "Generated with" footer. A `Co-authored-by` trailer for a person is fine.
-- **No names of the sites you point Solverr at, and no scraping vocabulary.** Write `example-site.tld` or "a Cloudflare-gated site" instead.
+- **No names of the sites you point Solverr at.** Write `example-site.tld` or "a Cloudflare-gated site" instead. The check also rejects a few words that would make Solverr read as a tool built for harvesting one site; `.githooks/commit-msg` lists them.
 - **A change that is more than a one-liner gets a body.** Lead with one or two plain sentences on what changed and why it matters, then bullets.
 
 For example, `Fixed the cookie bug.` is rejected, and `fix(stealth): accept a cookie without a domain` passes.

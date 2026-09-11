@@ -21,9 +21,9 @@ After a code change with any user-facing effect, add a bullet under `## [Unrelea
 
 ## Cutting a release (user-initiated)
 
-1. Rename `## [Unreleased]` to `## [<version>]`.
+1. Rename `## [Unreleased]` to `## [<version>]`, and collapse any entries in it that state the same fact: a fix to something added in the same release folds into that addition's entry.
 2. Add a fresh empty `## [Unreleased]` above it.
-3. Bump `version` in `package.json` to `<version>`, and commit.
+3. Bump `version` in `package.json` and the version in the README's response example to `<version>`, and commit.
 4. Tag and push: `git tag v<version> && git push origin v<version>`.
 
 The tag triggers `release-docker.yml` (builds + pushes the ghcr image) and `release.yml` (creates the GitHub Release from the `[<version>]` section). `release.yml` can also be run manually from the Actions tab (workflow_dispatch) with the version and an optional note. Don't bump the version mid-cycle; only at release-cut.
@@ -34,8 +34,10 @@ Create a commit after a change (do not push unless asked).
 
 - Subject `type(scope): summary`: a real conventional type (`feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`), imperative, lower-case, no trailing period, `<=72` chars. Scope optional (`chrome`, `stealth`, `sessions`, `docker`).
 - Non-trivial commits get a body: lead with 1-2 plain-language sentences (what changed and why it matters), then benefit-first bullets. A trivial commit is just the subject.
-- No em dashes. No AI watermarks (no `Co-Authored-By: Claude`, no generated-by footer, no robot emoji).
+- No em dashes. No AI watermarks (no `Co-Authored-By: Claude`, no generated-by footer, no robot emoji). A `Co-authored-by` trailer for a person is credit and passes the hook; one naming an AI tool is a watermark and is rejected.
 - **Never a bare `#N`** in the subject or body: it silently links to an issue in this repo. Use the explicit `owner/repo#N` form (`FlareSolverr/FlareSolverr#1626`, `ThePhaseless/Byparr#377`).
+
+**Merging a pull request.** A person merges every pull request, with a merge commit, never squash or rebase. A squash subject ends in ` (#N)`, which the bare-`#N` check rejects on `main`, and a merge commit keeps an outside contributor's commits under their name. The standard for contributors is written out in `CONTRIBUTING.md` and the pull request template; keep both in step with this file. When a contributor's commit message breaks the standard, reword it with `git commit --amend` (which keeps them as the author), push it to their branch with `--force-with-lease`, then merge. Never recommit their change under your own name.
 
 ### Pre-commit checklist
 
@@ -50,7 +52,7 @@ Run these against the message before committing. The first four are also enforce
 
 ## Public-facing naming
 
-**Keep the names of the sites Solverr is pointed at out of every public surface**: commit messages, branch names, `README.md`, `CLAUDE.md`, `CHANGELOG.md`, release notes, and the repo description and topics. Solverr is a general-purpose bypass proxy; naming targets makes it read as tooling for one specific site.
+**Keep the names of the sites Solverr is pointed at out of every public surface**: commit messages, branch names, `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, the pull request template, release notes, and the repo description and topics. Solverr is a general-purpose bypass proxy; naming targets makes it read as tooling for one specific site.
 
 Use generic wording instead: "a Cloudflare-gated site", "an indexer", "the default mirror", "example-site.tld" in docs and examples. Site names are fine in local test scratch files, in chat, and in a private indexer definition that lives outside this repo.
 
@@ -64,10 +66,11 @@ Inherited exception: `src/tests_sites.py` and `src/tests.py` carry a site list f
 git config core.hooksPath .githooks
 ```
 
-- `commit-msg` enforces the message standard above.
-- `pre-commit` lints staged `CHANGELOG.md` and `README.md` for the naming rule, em dashes, and the benefit-first headline format.
+- `commit-msg` rejects: a subject that is not `type(scope): summary`; a subject over 72 characters; an em dash anywhere; an AI watermark (an AI `Co-authored-by` trailer, "Generated with", the robot emoji); a bare `#N`; a domain-shaped site name or scraping vocabulary. Merge, revert, fixup and squash commits pass untouched.
+- `pre-commit` lints the lines a commit adds to `CHANGELOG.md`, `README.md`, `CONTRIBUTING.md` and `CLAUDE.md` for the naming rule and em dashes, and every `[Unreleased]` entry outside `Other` for a bold headline ending in `.`, `!` or `?`.
+- `.githooks/tests/run.sh` proves each rule above still rejects a real violation and passes a clean case. Run it after touching either hook.
 
-Never bypass with `--no-verify`. If a hook fires on something legitimate, fix the hook in the same change.
+CI runs all of it: the Standards workflow runs the hook self-test, then `commit-msg` on every non-merge commit and `pre-commit` over the pushed range, and the Tests workflow runs the browser-free suite on every pull request. Never bypass with `--no-verify`. If a hook fires on something legitimate, fix the hook and its self-test in the same change.
 
 ## Approach
 
