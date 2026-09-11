@@ -77,6 +77,12 @@ _TYPE_OVERRIDES = {
     'maxTimeout': None,
     # A fractional wait is meaningful and both engines sleep on it happily.
     'waitInSeconds': (int, float),
+    # Deprecated in FlareSolverr v2 and never read by Solverr; upstream
+    # FlareSolverr only warns and ignores it. Legacy clients such as Prowlarr
+    # still send an object here (its HeadersPost), which the `list` annotation
+    # above would reject outright. Exempt it rather than break a client that
+    # isn't wrong.
+    'headers': None,
 }
 
 _TYPE_NAMES = {
