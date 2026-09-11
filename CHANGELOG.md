@@ -6,6 +6,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ### Fixes
 
+- **The log no longer records proxy passwords, cookie values or form field values; logs written by earlier versions may hold your `PROXY_PASSWORD`, so clear them or change it.** Every request was logged at the default level with the proxy password filled in from `PROXY_PASSWORD`, and debug logging added the solved cookies and the Turnstile token. The lines still show the command, the URL and every name, with the values replaced by `<redacted>`.
 - **Form POST requests from Prowlarr work again, instead of failing with "Request parameter 'headers' must be a list".** 1.6.0 started checking the type of the deprecated `headers` field, which Solverr has never read and which clients send as an object; it is accepted in any shape again and still ignored.
 
 ## [1.6.0]

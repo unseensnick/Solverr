@@ -13,6 +13,7 @@ import undetected_chromedriver as uc
 
 import config
 import geo
+import redact
 
 FLARESOLVERR_VERSION = None
 PLATFORM_VERSION = None
@@ -186,7 +187,7 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
         options.add_argument("--load-extension=%s" % os.path.abspath(proxy_extension_dir))
     elif proxy and 'url' in proxy:
         proxy_url = proxy['url']
-        logging.debug("Using webdriver proxy: %s", proxy_url)
+        logging.debug("Using webdriver proxy: %s", redact.url(proxy_url))
         options.add_argument('--proxy-server=%s' % proxy_url)
 
     options.add_argument('--disable-features=%s' % ','.join(disabled_features))
