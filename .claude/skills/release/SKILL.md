@@ -31,7 +31,7 @@ Flag anything in the block that could surprise an existing client, and make sure
 Stop and report rather than continuing if any of these fail:
 
 1. `git status` is clean apart from what you are about to commit, and the branch is `main`.
-2. The browser-free tests pass: `PYTHONPATH=src uv run --no-project python -m unittest test_detection test_response_shape test_request_validation test_browser_identity test_geo`.
+2. The whole browser-free suite passes, never a hand-picked module list: `PYTHONPATH=src uv run --no-project python -m unittest discover -s src -p 'test_*.py' -t src`.
 3. Compile check: `uv run --no-project python -m py_compile src/*.py src/engines/*.py`.
 4. `[Unreleased]` actually has entries. An empty block means there is nothing to release.
 5. The version in `package.json` is the previous one, and no tag for the new version exists yet (`git tag -l v<version>`).
@@ -42,7 +42,7 @@ Stop and report rather than continuing if any of these fail:
 1. Rename `## [Unreleased]` to `## [<version>]` and add a fresh empty `## [Unreleased]` above it.
 2. Bump `version` in `package.json`.
 3. Bump the `"version"` field in the `README.md` `/v1` response example. It is easy to miss because nothing fails without it: the docs simply keep advertising the previous release. Check with `grep -n '"version"' README.md`, which should return exactly one line and it should read the version being cut. This was missed on the 1.5.0 cut.
-4. Commit as `chore(release): <version>`, nothing else in that commit.
+4. Commit as `chore(release): <version>`, holding those three edits and nothing else.
 
 ## Step 4: Push, then tag
 
@@ -70,6 +70,6 @@ Report the tag, the release URL, both workflow outcomes, and the digests. Then g
 
 - Never push a tag without explicit confirmation in the same conversation.
 - Never force-push, and never re-tag a published version. A mistake gets a new patch version.
-- The release commit contains only the CHANGELOG rename and the version bump.
+- The release commit contains only the CHANGELOG rename, the `package.json` version bump, and the version in the `README.md` response example.
 - Re-running `release.yml` by hand regenerates the notes and discards any manual edit to the release body. Say so if the body was edited.
 - No em dashes. Commas, parentheses, periods, colons.

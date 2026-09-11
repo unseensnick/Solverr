@@ -44,7 +44,7 @@ contains_icmd() { printf '%s' "$COMMAND" | grep -qiE "$1"; }
 
 # ── Git push protections ────────────────────────────────────────────────
 # The session's cwd, which is where the command actually runs. The hook's own cwd is always the
-# project dir, so without this a push from a loop worktree is judged by the main tree's branch.
+# project dir, so without this a push from a worktree is judged by the main tree's branch.
 SESSION_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)
 if contains_cmd '(^|[;&|()]+[[:space:]]*)git[[:space:]]+push'; then
   # Explicit refspec to a protected branch (origin main, :main, HEAD:main, remote branch)
@@ -71,9 +71,8 @@ if contains_cmd '(^|[;&|()]+[[:space:]]*)git[[:space:]]+push'; then
 fi
 
 # ── Merging is never the agent's call ───────────────────────────────────
-# The loop worker opens a draft PR and stops, and every PR is merged by a person with a merge
-# commit. To GitHub a PR merge is a legitimate action, so no ruleset can express this; the
-# matcher here is the only guard.
+# Every PR is merged by a person, with a merge commit. To GitHub a PR merge is a legitimate
+# action, so no ruleset can express this; the matcher here is the only guard.
 if contains_cmd '(^|[;&|()]+[[:space:]]*)gh[[:space:]]+pr[[:space:]]+merge'; then
   emit_deny "Blocked: merging a PR is the owner's call. Open the PR and stop."
 fi

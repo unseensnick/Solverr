@@ -1,5 +1,5 @@
 {
   "name": "allow git worktree remove --force",
-  "stdin": { "tool_input": { "command": "git worktree remove .worktrees/loop-12 --force" } },
+  "stdin": { "tool_input": { "command": "git worktree remove .worktrees/scratch --force" } },
   "expect_exit": 0
 }

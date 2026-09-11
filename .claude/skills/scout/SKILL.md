@@ -52,7 +52,8 @@ Brief one `Agent` with `subagent_type: Explore` per area that applies, all in a 
 | Area | When relevant | What to brief |
 |---|---|---|
 | Current Solverr code | Always | Target files, callers, callees, the controller path that reaches them, existing tests. |
-| Upstream equivalent | Ports, drift checks | `../FlareSolverr` for the Chrome engine, `/v1`, sessions; `../Byparr` for the stealth stack. Hand over the matching file paths and `git -C <ref> log --oneline -15 -- <path>`. Ask what differs and why. |
+| Upstream equivalent | Ports, drift checks | `../FlareSolverr` for the Chrome engine, `/v1`, sessions; `../Byparr` for the stealth stack. Hand over the matching file paths and `git -C <ref> log --oneline -15 -- <path>`. Ask what differs and why. When the upstream file has no Solverr counterpart of the same shape (FlareSolverr's `_evil_logic` and `sessions.py` were taken over), ask which spine site now carries that behaviour: the change lands there, not in a file rebuilt in upstream's shape. |
+| Engine layer | Anything touching an engine, or any port | `.claude/rules/engine-layer.md`, its seam-depth table above all. Shared spine: `src/assembly.py`, `src/pipeline.py`, `src/budget.py`, `src/sessions.py`, `src/config.py`, and `src/dtos.py` for request validation. Per engine: each adapter in `src/engines/`, and each clearing core (Chrome's challenge wait in `_evil_logic` and its turnstile helpers; stealth's `_wait_until_cleared`, the widget measuring in `_widget_box` and the click in `_click_turnstile`). Ask which of those the change touches. A port of a taken-over surface goes into the spine, and a client-visible change lands for both engines in one commit. |
 | Engine and runtime constraints | Anything touching solving | `src/async_runtime.py` (one shared loop), `src/engines/stealth_engine.py` (per-context lock, throwaway click page), `src/session_reaper.py`. Ask what runs on which thread and what is serialized. |
 | Contract surface | Anything reaching a response | `src/dtos.py`, `_to_challenge_resolution` in `src/flaresolverr_service.py`, `utils.object_to_dict`. Ask what an unset field serializes to. |
 | Existing helpers (DRY) | New helper tempting | `src/detection.py`, `src/config.py`, `src/postform.py`, `src/utils.py`. Search before letting the plan invent one. |
@@ -79,6 +80,7 @@ Additions specific to this skill:
 
 - **A claim without a `file:line` from code actually read** goes in Open questions, never in Findings.
 - **A source contradiction is itself a finding.** When memory, `Handoff.md`, or a doc disagrees with current code, trust the code and record it under Stale docs.
+- **Deferred work is not a defect.** If the deferred or dead-end list from Step 2 already covers something, say so once and move on.
 - **The plan names the helper it reuses**, citing it. A step that invents a utility the repo already has is a failed scout.
 - **Say whether the change is verifiable without a browser.** If it can only be proven against a live challenge, the plan's last step is `/live-check`, not "run the tests".
 
@@ -92,6 +94,7 @@ End with one of: **"Ready to implement."**, **"Open questions block implementati
 - Every claim cites `file:line` from current code. Memory and `Handoff.md` claims are hypotheses until cited.
 - Never fill an unresolved gap with an assumption. Investigate it or surface it.
 - Cap each subagent at ~500 words; the report follows the ~1500 word cap in `plan-output.md`. A bigger task needs decomposition, not a longer report.
+- No interim narration: one sentence when the agents are spawned, then nothing until the report.
 - No em dashes. Commas, parentheses, periods, colons.
-- No assumptions about library behavior. If the plan leans on what Playwright, Selenium, or playwright-captcha does, cite the installed source under `.venv/Lib/site-packages/`, not documentation from memory.
+- No assumptions about library behavior. If the plan leans on what Playwright, Selenium, or playwright-captcha does, cite the installed source under `.venv/Lib/site-packages/`, not documentation from memory. Check the package's `.dist-info` version against `requirements.txt` first: the local `.venv` can lag the pin, and then the source it shows is not what ships.
 - If an Explore agent comes back vague, the brief was too loose. Re-spawn with a sharper scope before synthesizing.

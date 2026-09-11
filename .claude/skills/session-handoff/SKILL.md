@@ -40,12 +40,15 @@ Never write the handoff from conversation memory alone. These are the facts the 
 
 Keep these sections. Omit one only when it genuinely has nothing, rather than writing a placeholder.
 
+- **Read first**: the two or three docs that frame the work, most authoritative first. For engine work that is `.claude/rules/engine-layer.md`, then `docs/dev/engine-layer-architecture.md`; for a port, `docs/dev/upstream-sync.md`.
 - **Goal**: the program-level outcome, not the next tactical step. What the fork is for, plus what this session was actually about.
 - **Current state**: what works, what is half-done, what is deliberately not done. Lead with the branch, HEAD SHA, pushed/unpushed count, and tree state. Include the release and container facts from Step 1. Name measured effects where there are any (timings, tallies, digests), because "it works" does not survive a week.
 - **Files**: only files central to the in-progress work, each with its role and status (new / modified / needs-attention). A handoff listing forty files is noise. Point at the browser-free test command when tests changed.
 - **Changes made**: a line per commit, grouped when a group tells the story better. Mark which are verified live and which are not.
 - **What failed**: the highest-value section. The approach, what was expected, what happened. Group variations of one idea so the next session does not try variation four. Include process failures (a wrong tool invocation, a bad assumption about the harness, a probe that tested the wrong thing) alongside code ones, and record corrections to your own earlier conclusions.
 - **Next steps**: ordered and concrete, saying which step gates which. Branch the ones that depend on an unknown.
+- **Parked (do not raise unprompted)**: items blocked on an owner decision. Say plainly that the next session should not raise them unprompted, and where the detail lives (an issue as `owner/repo#N`, a ledger entry, a memory).
+- **Durable gotchas**: facts that will outlive this session, such as a measured constraint, a deliberate exception, or a tool trap. Each one also goes to a memory or `CLAUDE.md` per the split in Step 3; the handoff copy is the reminder, not the record.
 - **Conventions**: the repo rules the next session must respect from its first action, including the naming rule and the `/v1` compatibility constraints.
 
 ## Step 3: The doc set
@@ -68,7 +71,7 @@ For the memory pass, prefer updating an existing file over adding a near-duplica
 ## Step 4: Commit and verify
 
 1. Commit tracked doc changes (`CHANGELOG.md`, `README.md`, `CLAUDE.md`, `docs/dev/upstream-sync.md`) with a `docs(...)` subject. `Handoff.md` is never in that commit.
-2. Run the browser-free tests if any code changed: `PYTHONPATH=src uv run --no-project python -m unittest test_detection test_response_shape test_request_validation test_browser_identity test_geo`.
+2. Run the whole browser-free suite if any code changed, never a hand-picked module list: `PYTHONPATH=src uv run --no-project python -m unittest discover -s src -p 'test_*.py' -t src`.
 3. Report the final branch state, so the owner knows whether anything is left to push, and whether the tag and image are published or pending.
 
 ## Solverr conventions the global skill cannot know
