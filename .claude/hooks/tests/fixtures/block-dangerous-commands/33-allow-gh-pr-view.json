@@ -1,0 +1,5 @@
+{
+  "name": "allow reading a PR",
+  "stdin": { "tool_input": { "command": "gh pr view 11 -R owner/repo --json state,mergeable" } },
+  "expect_exit": 0
+}

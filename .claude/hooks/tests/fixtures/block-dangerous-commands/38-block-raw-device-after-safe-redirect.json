@@ -1,0 +1,6 @@
+{
+  "name": "block a raw device write even after a safe redirect",
+  "stdin": { "tool_input": { "command": "ls >/dev/null && cat x > /dev/sda" } },
+  "expect_exit": 2,
+  "expect_stdout_contains": ["deny", "device"]
+}
