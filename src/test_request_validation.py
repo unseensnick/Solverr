@@ -218,6 +218,10 @@ class RequestTypesTest(unittest.TestCase):
         with self.assertRaises(Exception):
             self.check(tabs_till_verify=True)
 
+    def test_the_deprecated_headers_object_is_accepted(self):
+        # Prowlarr's form POST sends this shape; the field is never read.
+        self.assertIsNone(self.check(headers={"contentType": "application/x-www-form-urlencoded"}))
+
     def test_a_numeric_max_timeout_string_is_left_to_its_own_validator(self):
         # Deliberately coerced rather than type-checked, for callers that work today.
         self.assertIsNone(self.check(maxTimeout="90000"))

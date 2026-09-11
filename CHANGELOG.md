@@ -4,6 +4,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Fixes
+
+- **Form POST requests from Prowlarr work again, instead of failing with "Request parameter 'headers' must be a list".** 1.6.0 started checking the type of the deprecated `headers` field, which Solverr has never read and which clients send as an object; it is accepted in any shape again and still ignored.
+
 ## [1.6.0]
 
 ### Additions
