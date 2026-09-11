@@ -54,6 +54,7 @@ Two engines behind one interface: `chrome` (Selenium + vendored undetected_chrom
 
 - `/scout`: investigate one non-trivial task, then produce its plan, grounded in `file:line` citations. Use before porting from an upstream or touching the engines, sessions, or the controller.
 - `/code-research`: fan-out research for a broad question spanning many files. `/scout` is for one concrete task.
+- `/deep-audit`: read-only, many-agent audit of a whole range (default the branch against `main`) before a PR or a release. Maps the range and stops for approval, runs fourteen lenses including engine parity and two-ends tracing, refutes every finding before it counts, mutation-checks the range's new tests, and reports. Refuted findings go in its ledger. It never fixes anything.
 - `/upstream-audit`: compare against FlareSolverr and Byparr, classify every difference as covered, missing, or deliberate, and check `/v1` compatibility and the dependency pins. Proposes the ledger update.
 - `/live-check`: verify a change against live challenges through an isolated container. The unit tests cannot tell you whether a page still clears; this can.
 - `/release`: cut a version end to end: decide the bump, preflight, tag, then verify the workflows and the published image digests.
