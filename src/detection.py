@@ -77,6 +77,12 @@ INTERSTITIAL_SELECTORS = [
 # widget carries it on a perfectly solved page, and every Cloudflare gate that
 # wraps a widget also carries one of the markers above, so it only cost a wasted
 # fallback and an uncacheable response.
+# Measured against seven live gates on 2026-09-12 (four hosts, English and
+# localized): only the first and the last of these fired. Cloudflare now
+# randomises the challenge element ids, so challenge-form and challenge-stage
+# are legacy coverage rather than what catches a gate today. The saved samples
+# still carry them, which is why html_samples/cloudflare_managed_2026_v1.html
+# was added: a fixture from before the id change cannot show that.
 CHALLENGE_HTML_MARKERS = (
     'window._cf_chl_opt',
     'cf-challenge-running',

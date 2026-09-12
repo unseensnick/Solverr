@@ -63,7 +63,7 @@ These need no review until upstream changes them. Verified identical on 2026-09-
 
 - `src/undetected_chromedriver/` (the whole vendored package)
 - `src/tests.py`, `src/tests_sites.py` (they carry upstream's site list; leave as-is so the files stay mergeable, and do not add to them). `src/build_package.py` is not on this list: Solverr deleted it in `0fe4af7`, so upstream's changes to it are never applicable.
-- `html_samples/*.html`
+- `html_samples/*.html`, except `cloudflare_managed_2026_v1.html`, which is Solverr's own: a live gate captured on 2026-09-12 with its single-use values replaced. Upstream's four samples predate Cloudflare randomising the challenge element ids, so they carry `id="challenge-form"` and `id="challenge-stage"` while a gate served today carries neither, and the detection tests would otherwise only ever see the old markup.
 - `src/bottle_plugins/`, except `prometheus_plugin.py`, which caps the domain label (`_MAX_DOMAIN_LABELS`) so an unbounded set of hosts cannot grow the Prometheus registry without limit
 
 `src/utils.py` was on this list until 2026-08-13 and now carries eight divergences, verified against upstream on 2026-09-12. All but the last two are in `get_webdriver`, and line numbers move under it, so each is named by its landmark.
