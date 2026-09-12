@@ -558,3 +558,20 @@ class EnvProxyInjectionTest(unittest.TestCase):
         self.assertEqual(self.injected(PROXY_URL='http://proxy.tld:8080',
                                        PROXY_USERNAME='me', PROXY_PASSWORD='pw'),
                          {"url": "http://proxy.tld:8080", "username": "me", "password": "pw"})
+
+
+class ResolvedCacheBoundTest(unittest.TestCase):
+    """The cache key comes from a request field, so the cache is bounded."""
+
+    def setUp(self):
+        geo.reset_cache()
+
+    def tearDown(self):
+        geo.reset_cache()
+
+    def test_a_client_sending_endless_proxies_cannot_grow_it(self):
+        with patch.object(geo, '_load_resolver', return_value=_resolver()):
+            for i in range(geo._MAX_CACHED_EXITS + 25):
+                geo.browser_identity({"server": "http://proxy-%d.tld:8080" % i})
+
+        self.assertEqual(len(geo._cache), geo._MAX_CACHED_EXITS)

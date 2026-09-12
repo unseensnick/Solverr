@@ -137,10 +137,9 @@ class EngineConformanceTest(unittest.TestCase):
                                  [c["name"] for c in result.cookies])
 
     def test_both_engines_agree_on_the_cookie_key_set(self):
-        seen = {}
-        for name, result, _ in self.each():
-            seen[name] = sorted({k for c in result.cookies for k in c})
-        self.assertEqual(len(set(map(tuple, seen.values()))), 1, seen)
+        seen = {name: sorted({k for c in result.cookies for k in c})
+                for name, result, _ in self.each()}
+        self.assertEqual(seen["chrome"], seen["stealth"])
 
 
 class DisableMediaConformanceTest(unittest.TestCase):

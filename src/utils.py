@@ -166,8 +166,13 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # change language depending on which engine answered it. Sent as the
     # "tag, base" pair a desktop browser sends, since --accept-lang is passed
     # through verbatim and a single-element navigator.languages stands out.
-    options.add_argument('--accept-lang=%s' % geo.accept_language(
-        geo.browser_language(geo.proxy_to_config(proxy))))
+    language = geo.browser_language(geo.proxy_to_config(proxy))
+    options.add_argument('--accept-lang=%s' % geo.accept_language(language))
+    # Added after the pair, and deliberately: undetected_chromedriver derives
+    # Chrome's --lang from the last argument whose name contains "lang", and
+    # would otherwise take the header pair, launching the browser with
+    # --lang=de-DE, de. The UI language is one tag.
+    options.add_argument('--lang=%s' % language)
 
     if config.response_headers():
         # The only way Selenium can see response headers: ask the browser to log

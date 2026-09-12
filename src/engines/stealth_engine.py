@@ -285,16 +285,13 @@ class StealthEngine(Engine):
     def exists(self, session_id: str) -> bool:
         return self._sessions.exists(session_id)
 
-    def create_session(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
-                       force_new: bool = False) -> Tuple[str, bool]:
-        session, fresh = self._sessions.create(session_id, proxy, force_new)
+    def create_session(self, session_id: Optional[str] = None,
+                       proxy: Optional[dict] = None) -> Tuple[str, bool]:
+        session, fresh = self._sessions.create(session_id, proxy)
         return session.session_id, fresh
 
     def destroy_session(self, session_id: str) -> bool:
         return self._sessions.destroy(session_id)
-
-    def touch(self, session_id: str) -> None:
-        self._sessions.touch(session_id)
 
     def reap_idle(self, ttl: timedelta) -> List[str]:
         return self._sessions.reap_idle(ttl)

@@ -3,10 +3,8 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 from uuid import uuid1
-
-from typing import Any, Callable
 
 
 @dataclass
@@ -98,7 +96,6 @@ class SessionStore:
         self._lock = threading.Lock()
 
     def create(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
-               force_new: Optional[bool] = False,
                claim: bool = False) -> Tuple[Session, bool]:
         """create creates new instance of WebDriver if necessary,
         assign defined (or newly generated) session_id to the instance
@@ -111,9 +108,6 @@ class SessionStore:
         new session has been created (True) or an existing one was used (False).
         """
         session_id = session_id or str(uuid1())
-
-        if force_new:
-            self.destroy(session_id)
 
         with self._lock:
             existing = self.sessions.get(session_id)
@@ -218,12 +212,6 @@ class SessionStore:
         # The session's own proxy, not the caller's: this is a rebuild of an
         # existing session, and the request that triggered it carries no proxy.
         return self.create(session_id, session.proxy, claim=True)
-
-    def touch(self, session_id: str) -> None:
-        with self._lock:
-            session = self.sessions.get(session_id)
-        if session is not None:
-            session.last_used = datetime.now()
 
     def end_use(self, session: Session) -> None:
         """Release the mark ``get`` took, so the session can be reaped again."""

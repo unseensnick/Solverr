@@ -150,8 +150,7 @@ def _known_zone(raw: str) -> Optional[str]:
     own, so the value is passed through unverified rather than dropped.
     """
     import geo
-    zones = geo._known_zones()
-    if not zones or raw in zones:
+    if geo.is_known_zone(raw):
         return raw
     if raw not in _rejected_zones:
         _rejected_zones.add(raw)

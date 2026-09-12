@@ -87,7 +87,7 @@ class FakeStealth:
     def __init__(self):
         self.created = []
 
-    def create_session(self, session_id=None, proxy=None, force_new=False):
+    def create_session(self, session_id=None, proxy=None):
         self.created.append(session_id)
         return session_id or "generated", True
 

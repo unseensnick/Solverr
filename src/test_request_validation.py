@@ -212,6 +212,12 @@ class RequestTypesTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "Request parameter 'cookies'"):
             self.check(cookies="nope")
 
+    def test_a_cookie_that_is_not_an_object_is_refused(self):
+        # Both engines index a cookie by key, so this used to fail after the
+        # page had been navigated to, with a Python type name for a message.
+        with self.assertRaisesRegex(Exception, "Request parameter 'cookies'"):
+            self.check(cookies=["name=value"])
+
     def test_a_proxy_that_is_not_an_object_is_refused(self):
         with self.assertRaisesRegex(Exception, "Request parameter 'proxy'"):
             self.check(proxy="socks5://1.2.3.4:9050")

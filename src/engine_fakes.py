@@ -199,8 +199,11 @@ class ChromeHarness:
         driver = _SeleniumDriver(world)
         req = V1RequestBase(dict({"url": world.url, "disableMedia": False}, **fields))
 
-        def _slept(_seconds):
-            driver.waited = True
+        def _slept(seconds):
+            # Only a real wait counts, as on the stealth side: counting sleep(0)
+            # made "the cookies were read after the wait" true for free.
+            if seconds:
+                driver.waited = True
 
         import utils
         with patch('engines.chrome_engine.time.sleep', side_effect=_slept), \

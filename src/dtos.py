@@ -129,6 +129,14 @@ def validate_request_types(req: 'V1RequestBase') -> None:
         if isinstance(value, bool) and wants_number or not isinstance(value, expected):
             raise Exception("Request parameter '%s' must be %s." % (name, _type_name(expected)))
 
+    # Each cookie too, not just the list: every engine indexes an item by key,
+    # so a string or a number in the list failed after navigation with a Python
+    # type name, and the controller turned that into a fallback to the other
+    # engine, which failed the same way.
+    for cookie in (req.cookies or []):
+        if not isinstance(cookie, dict):
+            raise Exception("Request parameter 'cookies' must be a list of objects.")
+
     unknown = sorted(set(req.__dict__) - set(V1RequestBase.__annotations__))
     if unknown:
         logging.warning("Ignoring unknown request parameter(s): %s. Check the spelling; "

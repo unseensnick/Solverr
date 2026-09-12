@@ -76,3 +76,39 @@ class _FakeDriver:
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BrowserLanguageFlagsTest(unittest.TestCase):
+    """What the launch tells Chrome about language, and in which flag.
+
+    undetected_chromedriver reads Chrome's --lang off the last argument whose
+    name contains "lang", so the Accept-Language header pair reached it as a UI
+    language of "de-DE, de" until the tag was passed in its own flag.
+    """
+
+    def flags(self):
+        seen = {}
+
+        def chrome(options=None, **_kwargs):
+            seen['args'] = list(options.arguments)
+            raise Exception("not launching a browser in a test")
+
+        with patch.object(utils, 'get_chrome_exe_path', return_value="/bin/chromium"), \
+                patch.object(utils, 'get_chrome_major_version', return_value="151"), \
+                patch.object(utils, 'start_xvfb_display'), \
+                patch.object(geo, 'browser_language', return_value="de-DE"), \
+                patch.object(geo, 'browser_timezone', return_value="UTC"), \
+                patch('undetected_chromedriver.Chrome', side_effect=chrome):
+            try:
+                utils.get_webdriver()
+            except Exception:
+                pass
+        return seen['args']
+
+    def test_the_header_carries_the_tag_and_its_base(self):
+        self.assertIn('--accept-lang=de-DE, de', self.flags())
+
+    def test_the_ui_language_is_one_tag(self):
+        # The last "lang" argument is the one the driver reads.
+        langs = [a for a in self.flags() if 'lang' in a]
+        self.assertEqual(langs[-1], '--lang=de-DE')

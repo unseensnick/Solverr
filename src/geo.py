@@ -29,6 +29,7 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from typing import Optional
 
 import config
@@ -57,7 +58,12 @@ _DEFAULT_LANGUAGE = "en-US"
 _ZONE_TAB_PATHS = ("/usr/share/zoneinfo/zone1970.tab", "/usr/share/zoneinfo/zone.tab")
 
 _lock = threading.Lock()
-_cache = {}  # exit identity -> (expires_monotonic, zone, language, complete)
+# exit identity -> (expires_monotonic, zone, language, complete). Bounded
+# because the identity comes from the request's own proxy field: a client that
+# sends a different proxy every time would otherwise grow this for ever. The
+# oldest entry goes first, and losing one costs a lookup, not correctness.
+_cache = OrderedDict()
+_MAX_CACHED_EXITS = 512
 _geo_zones = {}  # BROWSER_GEO tag -> zone or None
 _zone_table_cache = None
 _known_zones_cache = None
@@ -187,7 +193,10 @@ def _resolved(proxy_config: Optional[dict], pinned_zone: Optional[str],
             # the fallback pair in place of an answer already known to be right.
             return cached[1], cached[2]
         ttl = _cache_seconds() if complete else _FAILURE_CACHE_SECONDS
+        _cache.pop(key, None)
         _cache[key] = (time.monotonic() + ttl, zone, language, complete)
+        while len(_cache) > _MAX_CACHED_EXITS:
+            _cache.popitem(last=False)
     return zone, language
 
 
@@ -326,11 +335,26 @@ def _zone_table() -> dict:
     return table
 
 
+def is_known_zone(name: str) -> bool:
+    """Whether the system's timezone table names this zone.
+
+    Public because config validates BROWSER_TIMEZONE with it. An empty table
+    (no tzdata on the host) says nothing, so it accepts anything rather than
+    rejecting every zone.
+    """
+    zones = _known_zones()
+    return not zones or name in zones
+
+
 def _known_zones() -> set:
-    """Every zone name the system's table lists, for validating an override."""
+    """Every zone name the system's table lists, for validating an override.
+
+    Every row, not the per-country pick: the pick is one of the rows, so
+    unioning the two added nothing.
+    """
     global _known_zones_cache
     if _known_zones_cache is None:
-        _known_zones_cache = set(_zone_table().values()) | _all_zone_names()
+        _known_zones_cache = _all_zone_names()
     return _known_zones_cache
 
 
