@@ -3,6 +3,9 @@
 Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 1.0.0. It began as a fork of [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) 3.5.0; for history before this fork, see the upstream releases.
 
 ## [Unreleased]
+
+## [1.7.0]
+
 ### Additions
 
 - **`PASSTHROUGH_CACHE_REQUIRES` stops the passthrough serving a site's own error page for the whole cache window.** Name something every real page carries (the link prefix your result rows use, say) and a body without it is kept for a minute rather than an hour, so an indexer stops looking broken for an hour after one bad moment upstream. Unset, nothing changes.
