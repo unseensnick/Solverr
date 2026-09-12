@@ -9,6 +9,7 @@ Run: PYTHONPATH=src uv run --no-project python -m unittest test_session_locking
 """
 import threading
 import unittest
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 from dtos import V1RequestBase
@@ -39,15 +40,18 @@ class _Overlap:
 
 
 def _chrome_engine(overlap):
+    """(solve, patches) for the Chrome engine on one session.
+
+    The patches are applied once, around both threads: unittest.mock is not
+    thread safe, and patching inside each thread left the class patched for
+    every test that ran afterwards.
+    """
     store = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda d: None)
     store.create("s")
     engine = ChromeEngine(sessions=store)
-
-    def solve(req):
-        with patch.object(chrome_engine, "_apply_timezone", lambda *_a: None), \
-                patch.object(ChromeEngine, "_evil_logic", lambda *_a: overlap.enter()):
-            engine.solve(req, "GET", 5.0)
-    return solve
+    patches = [patch.object(chrome_engine, "_apply_timezone", lambda *_a: None),
+               patch.object(ChromeEngine, "_evil_logic", lambda *_a: overlap.enter())]
+    return (lambda req: engine.solve(req, "GET", 5.0)), patches
 
 
 def _stealth_engine(overlap):
@@ -57,28 +61,28 @@ def _stealth_engine(overlap):
     engine._runtime.run = lambda coro, timeout=None: (coro.close(), overlap.enter())[1]
     engine._sessions = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda c: None)
     engine._sessions.create("s")
-
-    def solve(req):
-        engine.solve(req, "GET", 5.0)
-    return solve
+    return (lambda req: engine.solve(req, "GET", 5.0)), []
 
 
 class OneRequestAtATime(unittest.TestCase):
 
     def assert_serialised(self, build):
         overlap = _Overlap()
-        solve = build(overlap)
+        solve, patches = build(overlap)
         req = V1RequestBase({"url": "https://example-site.tld/", "session": "s"})
 
-        first = threading.Thread(target=solve, args=(req,))
-        first.start()
-        overlap.first_in.wait(2)
-        second = threading.Thread(target=solve, args=(req,))
-        second.start()
-        second.join(0.5)
-        overlap.may_finish.set()
-        first.join(2)
-        second.join(2)
+        with ExitStack() as stack:
+            for each in patches:
+                stack.enter_context(each)
+            first = threading.Thread(target=solve, args=(req,))
+            first.start()
+            overlap.first_in.wait(2)
+            second = threading.Thread(target=solve, args=(req,))
+            second.start()
+            second.join(0.5)
+            overlap.may_finish.set()
+            first.join(2)
+            second.join(2)
 
         self.assertFalse(overlap.overlapped)
 

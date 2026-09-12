@@ -46,6 +46,23 @@ _TURNSTILE_SELECTOR = ", ".join(TURNSTILE_SELECTORS)
 # it out on a page that turns out to have no widget at all.
 _WIDGET_RENDER_SECONDS = 5
 
+# What disableMedia blocks: images, stylesheets and fonts, which is what the
+# README promises and what the stealth engine blocks by resource type. Chrome
+# has no resource-type filter, so the same rule is spelled as URL patterns.
+_MEDIA_BLOCK_URLS = [
+    # Images
+    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp", "*.svg", "*.ico",
+    "*.PNG", "*.JPG", "*.JPEG", "*.GIF", "*.WEBP", "*.BMP", "*.SVG", "*.ICO",
+    "*.tiff", "*.tif", "*.jpe", "*.apng", "*.avif", "*.heic", "*.heif",
+    "*.TIFF", "*.TIF", "*.JPE", "*.APNG", "*.AVIF", "*.HEIC", "*.HEIF",
+    # Stylesheets
+    "*.css",
+    "*.CSS",
+    # Fonts
+    "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+    "*.WOFF", "*.WOFF2", "*.TTF", "*.OTF", "*.EOT"
+]
+
 class ChromeEngine(Engine):
     """Solve challenges with a real Chromium driven by undetected_chromedriver."""
 
@@ -123,27 +140,19 @@ class ChromeEngine(Engine):
         disable_media = utils.get_config_disable_media()
         if req.disableMedia is not None:
             disable_media = req.disableMedia
-        if disable_media:
-            block_urls = [
-                # Images
-                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp", "*.svg", "*.ico",
-                "*.PNG", "*.JPG", "*.JPEG", "*.GIF", "*.WEBP", "*.BMP", "*.SVG", "*.ICO",
-                "*.tiff", "*.tif", "*.jpe", "*.apng", "*.avif", "*.heic", "*.heif",
-                "*.TIFF", "*.TIF", "*.JPE", "*.APNG", "*.AVIF", "*.HEIC", "*.HEIF",
-                # Stylesheets
-                "*.css",
-                "*.CSS",
-                # Fonts
-                "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
-                "*.WOFF", "*.WOFF2", "*.TTF", "*.OTF", "*.EOT"
-            ]
-            try:
-                logging.debug("Network.setBlockedURLs: %s", block_urls)
-                driver.execute_cdp_cmd("Network.enable", {})
-                driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": block_urls})
-            except Exception:
-                # if CDP commands are not available or fail, ignore and continue
-                logging.debug("Network.setBlockedURLs failed or unsupported on this webdriver")
+        # Sent on every request, with an empty list when nothing is to be
+        # blocked: a session's driver keeps this CDP state, so a block set once
+        # went on blocking for every later request on that session, including
+        # ones that asked for media. The stealth engine drops its own routing at
+        # the end of each request for the same reason.
+        block_urls = _MEDIA_BLOCK_URLS if disable_media else []
+        try:
+            logging.debug("Network.setBlockedURLs: %s", block_urls)
+            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": block_urls})
+        except Exception:
+            # if CDP commands are not available or fail, ignore and continue
+            logging.debug("Network.setBlockedURLs failed or unsupported on this webdriver")
 
         # navigate to the page
         logging.debug(f"Navigating to... {req.url}")

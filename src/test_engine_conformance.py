@@ -140,6 +140,36 @@ class EngineConformanceTest(unittest.TestCase):
         self.assertEqual(len(set(map(tuple, seen.values()))), 1, seen)
 
 
+class DisableMediaConformanceTest(unittest.TestCase):
+    """One request option, one meaning, whichever engine answers.
+
+    It used to mean "images, CSS and fonts" on Chrome and "images, video and
+    fonts" on the stealth engine, while the README promised the first on both.
+    """
+
+    def blocked(self, **fields):
+        for harness in HARNESSES:
+            world = World()
+            harness.solve(world, **fields)
+            yield harness.name, world.blocked_kinds
+
+    def test_both_engines_block_the_same_kinds(self):
+        got = dict(self.blocked(disableMedia=True))
+        self.assertEqual(got["chrome"], got["stealth"])
+
+    def test_the_kinds_are_the_ones_the_readme_promises(self):
+        for name, kinds in self.blocked(disableMedia=True):
+            with self.subTest(engine=name):
+                self.assertEqual(kinds, {"image", "stylesheet", "font"})
+
+    def test_a_request_that_does_not_ask_blocks_nothing(self):
+        # Chrome sessions keep this setting between requests, so "nothing" has
+        # to be stated rather than left to whatever the last request set.
+        for name, kinds in self.blocked(disableMedia=False):
+            with self.subTest(engine=name):
+                self.assertEqual(kinds, set())
+
+
 class ResponseHeaderConformanceTest(unittest.TestCase):
     """The first feature written once under the shared seam.
 

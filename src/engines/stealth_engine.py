@@ -36,6 +36,11 @@ from sessions import SessionStore
 # request's maxTimeout via asyncio.wait_for in _do_solve.
 _NETWORKIDLE_MS = 5000
 
+# What disableMedia blocks. Playwright names resource types, Chrome matches URL
+# patterns (_MEDIA_BLOCK_URLS there), and both spell out the same three kinds:
+# one request option cannot mean different things on the two engines.
+_BLOCKED_RESOURCE_TYPES = ("image", "stylesheet", "font")
+
 # A returned document is base64-encoded on top of the raw bytes and copied again
 # by the JSON response, so cap what we are willing to pull into memory.
 _MAX_PDF_BYTES = 32 * 1024 * 1024
@@ -363,7 +368,10 @@ class StealthEngine(Engine):
             block_handler = None
             if disable_media:
                 async def block_handler(route):
-                    if route.request.resource_type in ("image", "media", "font"):
+                    # The same three kinds the Chrome engine blocks and the
+                    # README promises. Byparr blocks media here instead of
+                    # stylesheets, which made one option mean two things.
+                    if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
                         await route.abort()
                     else:
                         await route.continue_()

@@ -10,6 +10,7 @@ Chrome, Playwright cookies for stealth. That difference is deliberate, because
 agreeing on the returned dialect is one of the rules being pinned.
 """
 import asyncio
+import fnmatch
 import json
 from dataclasses import dataclass, field
 from unittest.mock import patch
@@ -23,6 +24,15 @@ from engines.stealth_engine import StealthEngine
 
 # A cookie as the site would set it, before either browser's dialect is applied.
 Cookie = tuple  # (name, value, expiry_epoch_or_None)
+
+# One sample per resource kind. Chrome blocks by URL pattern and Playwright by
+# resource type, so a kind is "blocked" when the engine would stop this fetch.
+SAMPLE_RESOURCES = {"image": "https://example-site.tld/a.png",
+                    "stylesheet": "https://example-site.tld/a.css",
+                    "font": "https://example-site.tld/a.woff2",
+                    "media": "https://example-site.tld/a.mp4",
+                    "script": "https://example-site.tld/a.js",
+                    "document": "https://example-site.tld/"}
 
 LOADED = [("early", "1", 1893456000)]
 AFTER_WAIT = LOADED + [("late", "1", None)]
@@ -59,6 +69,11 @@ class World:
     # (state, timeout_ms) per post-solve settle wait, so a wait that ignores
     # what is left of the share is observable.
     settle_waits: list = field(default_factory=list)
+    # Resource kinds the engine stopped the browser fetching, so disableMedia
+    # meaning two different things is observable.
+    blocked_kinds: set = field(default_factory=set)
+    # Whether the engine took its routing back off at the end of the request.
+    unrouted: bool = False
     # What the engine actually handed its browser, so a refused cookie shows up.
     cookies_set: list = field(default_factory=list)
 
@@ -116,8 +131,12 @@ class _SeleniumDriver:
     def execute_script(self, _script):
         pass
 
-    def execute_cdp_cmd(self, _cmd, _params):
-        pass
+    def execute_cdp_cmd(self, cmd, params):
+        if cmd == "Network.setBlockedURLs":
+            patterns = params.get("urls") or []
+            self._world.blocked_kinds = {
+                kind for kind, url in SAMPLE_RESOURCES.items()
+                if any(fnmatch.fnmatch(url, pattern) for pattern in patterns)}
 
     def find_element(self, by, value):
         # Selenium's presence_of_element_located calls this, not find_elements,
@@ -242,11 +261,20 @@ class _PlaywrightPage:
     async def screenshot(self):
         return self.world.screenshot
 
-    async def route(self, *_a, **_k):
-        pass
+    async def route(self, _pattern, handler):
+        # Ask the engine's own handler about one fetch of each kind, which is
+        # what the browser would do.
+        for kind, url in SAMPLE_RESOURCES.items():
+            route = _Route(kind, url)
+            await handler(route)
+            if route.aborted:
+                self.world.blocked_kinds.add(kind)
 
     async def unroute(self, *_a, **_k):
-        pass
+        # The record of what this request blocked stays: dropping the routing at
+        # the end is what stops it reaching the next request, and the next
+        # request gets its own world.
+        self.world.unrouted = True
 
     def on(self, event, handler):
         if event == "response":
@@ -255,6 +283,26 @@ class _PlaywrightPage:
     def remove_listener(self, _event, handler):
         if handler in self._response_handlers:
             self._response_handlers.remove(handler)
+
+
+class _Route:
+    """One fetch the page's route handler decides about."""
+
+    def __init__(self, kind, url):
+        self.request = _RouteRequest(kind, url)
+        self.aborted = False
+
+    async def abort(self):
+        self.aborted = True
+
+    async def continue_(self):
+        pass
+
+
+class _RouteRequest:
+    def __init__(self, kind, url):
+        self.resource_type = kind
+        self.url = url
 
 
 class _Request:

@@ -21,6 +21,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A host that only one engine can clear is no longer sent back to the engine that failed once a session exists on both.** After a fallback the same session id is live in both pools, and the request went to whichever pool was listed first rather than to the engine that actually cleared that host. A page that still looks challenged also stops being recorded as a clearance.
 - **`sessions.create` for an id that already exists on the other engine reports it instead of opening a second browser for the same id.** `"engine": "auto"` also honours `DEFAULT_ENGINE` now, rather than always creating a Chrome session.
 - **Lowering `MAX_TIMEOUT_MS` below 60000 now bounds requests that ask for no `maxTimeout` too.** The default budget ignored the ceiling, so those requests kept a browser for a minute whatever the limit said.
+- **`disableMedia` blocks the same things on both engines now: images, CSS and fonts, as the README says.** The Camoufox engine blocked video and audio but not CSS, so one option meant two different things depending on which engine answered. A Chrome session also kept blocking for every later request on it, including requests that asked for media.
 - **Form POST requests from Prowlarr work again, instead of failing with "Request parameter 'headers' must be a list".** 1.6.0 started checking the type of the deprecated `headers` field, which Solverr has never read and which clients send as an object; it is accepted in any shape again and still ignored.
 
 ## [1.6.0]
