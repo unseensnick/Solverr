@@ -122,6 +122,17 @@ class EngineConformanceTest(unittest.TestCase):
                 late = [c for c in result.cookies if c["name"] == "late"][0]
                 self.assertNotIn("expiry", late)
 
+    def test_another_site_s_cookies_are_never_returned(self):
+        # A client adds returned cookies by name with no domain check, because
+        # the Chrome engine only ever reported the page's own. A session that
+        # has visited two sites must not hand one site's clearance to the other.
+        world = World(foreign_cookies=[("other_site_clearance", "1", None)])
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                result = harness.solve(world)
+                self.assertNotIn("other_site_clearance",
+                                 [c["name"] for c in result.cookies])
+
     def test_both_engines_agree_on_the_cookie_key_set(self):
         seen = {}
         for name, result, _ in self.each():

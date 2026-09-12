@@ -483,7 +483,13 @@ class StealthEngine(Engine):
                 return await page.content(), None
 
             async def cookies():
-                return _to_client_cookies(await ctx.context.cookies())
+                # Scoped to the page, not the whole context. A context outlives
+                # the request when it is a session, so an unscoped read hands
+                # back every host the session has ever visited, and clients add
+                # returned cookies by name with no domain check. The Chrome
+                # engine reports the active document's cookies only, which is
+                # what this matches.
+                return _to_client_cookies(await ctx.context.cookies(page.url))
 
             async def headers():
                 # Already tracked for PDF detection, so this costs nothing extra

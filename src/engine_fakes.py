@@ -44,6 +44,10 @@ class World:
     screenshot: bytes = b"\x89PNG-bytes"
     cookies_at_load: list = field(default_factory=lambda: list(LOADED))
     cookies_after_wait: list = field(default_factory=lambda: list(AFTER_WAIT))
+    # Cookies belonging to some other host. A live browser holds these once a
+    # session has visited more than one site, and no browser hands them to a
+    # page they do not belong to, so neither engine may return them.
+    foreign_cookies: list = field(default_factory=list)
     response_headers: dict = field(default_factory=lambda: {"content-type": "text/html"})
     selectors: frozenset = frozenset()
     challenged_for: int = 0
@@ -142,6 +146,8 @@ class _SeleniumDriver:
         return self._world.screenshot
 
     def get_cookies(self):
+        # WebDriver reports the active document's cookies only, so the world's
+        # foreign ones are never visible here.
         source = self._world.cookies_after_wait if self.waited else self._world.cookies_at_load
         out = []
         for name, value, expiry in source:
@@ -175,15 +181,24 @@ class _PlaywrightContext:
     def __init__(self, page):
         self._page = page
 
-    async def cookies(self):
+    @staticmethod
+    def _cookie(name, value, expiry, domain):
+        return {"name": name, "value": value, "domain": domain,
+                "path": "/", "httpOnly": False, "secure": True,
+                # Playwright reports -1 for a session cookie, not a missing key.
+                "expires": float(expiry) if expiry is not None else -1}
+
+    async def cookies(self, urls=None):
+        # Playwright's own rule: with no url the whole context comes back, every
+        # domain it has collected; with one, only the cookies that url would be
+        # sent. The context outlives a request here, so the difference is the
+        # difference between one site's jar and every site the session visited.
         source = (self._page.world.cookies_after_wait if self._page.waited
                   else self._page.world.cookies_at_load)
-        out = []
-        for name, value, expiry in source:
-            out.append({"name": name, "value": value, "domain": ".example-site.tld",
-                        "path": "/", "httpOnly": False, "secure": True,
-                        # Playwright reports -1 for a session cookie, not a missing key.
-                        "expires": float(expiry) if expiry is not None else -1})
+        out = [self._cookie(*c, ".example-site.tld") for c in source]
+        if urls is None:
+            out += [self._cookie(*c, ".other-site.tld")
+                    for c in self._page.world.foreign_cookies]
         return out
 
     async def add_cookies(self, cookies):
