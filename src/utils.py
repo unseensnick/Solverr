@@ -124,11 +124,19 @@ def create_proxy_extension(proxy: dict) -> str:
 
     proxy_extension_dir = tempfile.mkdtemp()
 
-    with open(os.path.join(proxy_extension_dir, "manifest.json"), "w") as f:
-        f.write(manifest_json)
+    # Cleans up after itself: background.js holds the proxy username and
+    # password in plaintext, and a failure between mkdtemp and the caller taking
+    # ownership left the directory (and on the second write, the credentials)
+    # behind with nobody holding the path.
+    try:
+        with open(os.path.join(proxy_extension_dir, "manifest.json"), "w") as f:
+            f.write(manifest_json)
 
-    with open(os.path.join(proxy_extension_dir, "background.js"), "w") as f:
-        f.write(background_js)
+        with open(os.path.join(proxy_extension_dir, "background.js"), "w") as f:
+            f.write(background_js)
+    except Exception:
+        shutil.rmtree(proxy_extension_dir, ignore_errors=True)
+        raise
 
     return proxy_extension_dir
 
@@ -190,7 +198,7 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
         proxy_extension_dir = create_proxy_extension(proxy)
     elif proxy and 'url' in proxy:
         proxy_url = proxy['url']
-        logging.debug("Using webdriver proxy: %s", redact.url(proxy_url))
+        logging.debug("Using webdriver proxy: %s", redact.proxy_url(proxy_url))
         options.add_argument('--proxy-server=%s' % proxy_url)
 
     # Everything from here on is inside the try because the extension directory

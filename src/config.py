@@ -172,6 +172,22 @@ def response_headers() -> bool:
     return _bool('RESPONSE_HEADERS', False)
 
 
+_warned_empty_proxy = False
+
+
+def _warn_empty_proxy() -> None:
+    """Say once that a set-but-blank PROXY_URL means no proxy.
+
+    It used to fail every request instead, which was at least loud. Now traffic
+    leaves on the server's own address, which is what the deployer was trying to
+    avoid by setting the variable at all.
+    """
+    global _warned_empty_proxy
+    _warned_empty_proxy = True
+    logging.warning("PROXY_URL is set but empty, so requests go out directly. "
+                    "Give it a proxy URL, or unset it to say so on purpose.")
+
+
 def env_proxy() -> Optional[dict]:
     """The configured proxy as a request-shaped dict, or None when unset.
 
@@ -185,6 +201,8 @@ def env_proxy() -> Optional[dict]:
     """
     url = os.environ.get('PROXY_URL')
     if not url:
+        if url is not None and not _warned_empty_proxy:
+            _warn_empty_proxy()
         return None
     username = os.environ.get('PROXY_USERNAME')
     password = os.environ.get('PROXY_PASSWORD')

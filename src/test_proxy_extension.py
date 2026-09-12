@@ -112,3 +112,31 @@ class BrowserLanguageFlagsTest(unittest.TestCase):
         # The last "lang" argument is the one the driver reads.
         langs = [a for a in self.flags() if 'lang' in a]
         self.assertEqual(langs[-1], '--lang=de-DE')
+
+
+class ExtensionCreationFailureTest(unittest.TestCase):
+    """The directory holds the credentials from its second write onward."""
+
+    def test_a_failed_write_leaves_no_directory_behind(self):
+        created = []
+        real_mkdtemp = utils.tempfile.mkdtemp
+
+        def mkdtemp(*a, **k):
+            path = real_mkdtemp(*a, **k)
+            created.append(path)
+            return path
+
+        real_open = open
+
+        def failing_open(path, *a, **k):
+            if str(path).endswith("background.js"):
+                raise OSError("disk full")
+            return real_open(path, *a, **k)
+
+        with patch.object(utils.tempfile, "mkdtemp", mkdtemp), \
+                patch("builtins.open", failing_open):
+            with self.assertRaises(OSError):
+                utils.create_proxy_extension({"url": "http://p:1", "username": "u",
+                                              "password": "secret"})
+
+        self.assertFalse(os.path.exists(created[0]))

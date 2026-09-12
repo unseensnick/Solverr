@@ -125,3 +125,53 @@ class ProxyUrlTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProxyUrlShapeTest(unittest.TestCase):
+    """Every shape a proxy URL can arrive in, including the unparseable ones.
+
+    urlsplit ends the authority at the first "/", "?" or "#", so a password
+    carrying one of those reads as no password at all, and a URL with no scheme
+    has no authority for it to find. This field's userinfo is the credential, so
+    a shape that cannot be parsed goes whole rather than partly.
+    """
+
+    def test_a_password_containing_a_slash_is_not_logged(self):
+        self.assertEqual(redact.proxy_url("http://acct:Xk9/%s@proxy:8080" % SECRET), redact.REDACTED)
+
+    def test_a_password_containing_a_question_mark_is_not_logged(self):
+        self.assertEqual(redact.proxy_url("http://acct:%s?x@proxy:8080" % SECRET), redact.REDACTED)
+
+    def test_a_password_containing_a_hash_is_not_logged(self):
+        self.assertEqual(redact.proxy_url("http://acct:%s#x@proxy:8080" % SECRET), redact.REDACTED)
+
+    def test_a_url_with_no_scheme_is_not_logged(self):
+        self.assertEqual(redact.proxy_url("acct:%s@proxy:8080" % SECRET), redact.REDACTED)
+
+    def test_an_ordinary_credentialed_url_keeps_its_shape(self):
+        self.assertEqual(redact.proxy_url("http://acct:%s@proxy:8080" % SECRET),
+                         "http://acct:<redacted>@proxy:8080")
+
+    def test_a_url_without_credentials_is_left_alone(self):
+        self.assertEqual(redact.proxy_url("http://proxy.tld:8080"), "http://proxy.tld:8080")
+
+
+class ProxyFieldShapeTest(unittest.TestCase):
+    """The proxy field is logged before anything checks its type."""
+
+    def logged(self, proxy):
+        req = V1RequestBase({"cmd": "request.get", "url": "https://example-site.tld/",
+                             "proxy": proxy})
+        return _logged(self, req, V1ResponseBase({}))
+
+    def test_a_proxy_inside_a_list_is_not_logged(self):
+        self.assertNotIn(SECRET, self.logged([{"url": "http://u:%s@p:8080" % SECRET}]))
+
+    def test_a_url_inside_a_list_is_not_logged(self):
+        self.assertNotIn(SECRET, self.logged({"url": ["http://u:%s@p:8080" % SECRET]}))
+
+    def test_a_url_inside_an_object_is_not_logged(self):
+        self.assertNotIn(SECRET, self.logged({"url": {"inner": "http://u:%s@p:8080" % SECRET}}))
+
+    def test_a_well_formed_proxy_still_shows_its_server(self):
+        self.assertIn("proxy.tld", self.logged({"url": "http://proxy.tld:8080"}))

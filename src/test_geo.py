@@ -289,6 +289,18 @@ class ResolutionFailureTest(unittest.TestCase):
             geo._from_egress(geo.proxy_to_config(inline))
         self.assertNotIn('s3cr3t-pass', logs.output[0])
 
+    def test_a_percent_encoded_password_the_resolver_quotes_back_is_never_logged(self):
+        # invisible_core builds its URL with quote(password, safe=''), so the
+        # message carries the encoded form, not the one the config holds.
+        def boom(*_args):
+            raise RuntimeError("Failed to parse: "
+                               "http://proxyuser:p%40ss%20w%2Frd%231@proxy.tld:8080")
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')),              self.assertLogs(level='WARNING') as logs:
+            geo._from_egress(geo.proxy_to_config({"url": "http://proxy.tld:8080",
+                                                  "username": "proxyuser",
+                                                  "password": "p@ss w/rd#1"}))
+        self.assertNotIn('p%40ss%20w%2Frd%231', logs.output[0])
+
     def test_a_password_the_resolver_quotes_back_is_never_logged(self):
         # invisible_core builds its own credentialed URL and puts it in the
         # error, so the message carries the password the config kept separate.
@@ -504,6 +516,15 @@ class EnvProxyTest(unittest.TestCase):
     def test_no_proxy_url_means_no_proxy(self):
         with _env(PROXY_URL=None):
             self.assertIsNone(config.env_proxy())
+
+    def test_an_empty_proxy_url_says_so_once(self):
+        # It used to fail every request, which was at least loud; now the
+        # traffic quietly leaves on the server's own address instead.
+        config._warned_empty_proxy = False
+        with _env(PROXY_URL=''), self.assertLogs(level='WARNING') as logs:
+            config.env_proxy()
+            config.env_proxy()
+        self.assertEqual(len(logs.output), 1)
 
     def test_a_bare_url_needs_no_credentials(self):
         with patch.dict(os.environ, {'PROXY_URL': 'http://p:1'}, clear=True):

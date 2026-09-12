@@ -6,7 +6,7 @@ which cookies, headers and form fields there were) while replacing the values th
 credentials: a proxy password, cookie values, Cookie and Set-Cookie headers, form field values,
 and the Turnstile token.
 """
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 REDACTED = "<redacted>"
 
@@ -32,6 +32,51 @@ def url(value):
     return urlunsplit(parts._replace(netloc="%s:%s@%s" % (user, REDACTED, hostport)))
 
 
+def proxy_url(value):
+    """A proxy URL for a log line, with anything credential-shaped gone.
+
+    Stricter than `url`, because this field's userinfo is the credential. A
+    password carrying a "/", "?" or "#" ends urlsplit's authority early and a
+    URL with no scheme has no authority at all, so the parse reports no password
+    where there plainly is one, and `url` then hands the value back whole.
+    Anything still shaped like userinfo after that goes whole rather than partly.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    replaced = url(value)
+    if replaced != value:
+        return replaced
+    head = value.split("@", 1)[0]
+    if "@" in value and ":" in head:
+        return REDACTED
+    return value
+
+
+def _proxy(value):
+    """The `proxy` field, whatever shape it arrived in.
+
+    The one field whose whole purpose is to carry a credential, so a shape this
+    does not recognise is replaced rather than walked: the request is logged
+    before anything type-checks it, and a URL inside a list or a nested object
+    reached the log intact.
+    """
+    if isinstance(value, str):
+        return proxy_url(value)
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if key in _SECRET_KEYS and item:
+                out[key] = REDACTED
+            elif key == "url":
+                out[key] = proxy_url(item) if isinstance(item, str) else REDACTED
+            else:
+                out[key] = body(item)
+        return out
+    if value in (None, "", [], {}):
+        return value
+    return REDACTED
+
+
 def proxy_text(value, proxy_config):
     """Text we did not write (a library's exception message) with a proxy's
     credentials taken out.
@@ -43,7 +88,13 @@ def proxy_text(value, proxy_config):
     if not isinstance(value, str) or not proxy_config:
         return value
     server = proxy_config.get("server")
-    for secret in (proxy_config.get("password"), _password_in(server)):
+    password = proxy_config.get("password")
+    secrets = [password, _password_in(server)]
+    if isinstance(password, str) and password:
+        # invisible_core builds its URL with quote(password, safe=''), so the
+        # message carries the encoded form, which a literal replace would miss.
+        secrets += [quote(password, safe=""), quote(password)]
+    for secret in secrets:
         if secret:
             value = value.replace(secret, REDACTED)
     if isinstance(server, str) and server:
@@ -131,9 +182,7 @@ def body(obj):
         elif key == "postData":
             out[key] = _post_data(value)
         elif key == "proxy":
-            # A proxy sent as a plain string is refused later, but its password
-            # is in the userinfo and reaches this line first.
-            out[key] = url(value) if isinstance(value, str) else body(value)
+            out[key] = _proxy(value)
         elif key == "url":
             out[key] = url(value)
         else:

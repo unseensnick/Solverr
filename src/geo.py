@@ -441,7 +441,7 @@ def _from_egress(proxy_config: Optional[dict], pinned_zone: Optional[str] = None
         # the URL it built from the username and password it was given.
         server = (proxy_config or {}).get("server")
         logging.warning("could not resolve a timezone for %s (%s); using %s",
-                        redact.url(server) if server else "the direct connection",
+                        redact.proxy_url(server) if server else "the direct connection",
                         redact.proxy_text(str(e), proxy_config), container_timezone())
 
     if pinned_language:
