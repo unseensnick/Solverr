@@ -4,6 +4,7 @@ import re
 import sys
 import threading
 import time
+from collections import OrderedDict
 from urllib.parse import urlparse
 
 # Only these two schemes may reach a browser, matched on the literal prefix so
@@ -264,7 +265,13 @@ _MIN_ENGINE_SECONDS = 5.0
 
 # Per-domain memory of which engine last cleared a host, so a host that only the
 # stealth engine can solve skips the failing Chrome attempt on later requests.
-_DOMAIN_ENGINE = {}
+#
+# Bounded, because the key is a host the client asked for: a broad workload would
+# otherwise grow this for the life of the process, the same reason the metrics
+# exporter caps its domain labels. Past the cap the oldest host is forgotten,
+# which costs that host one routing decision, not correctness.
+_DOMAIN_ENGINE = OrderedDict()
+_MAX_REMEMBERED_HOSTS = 500
 _DOMAIN_LOCK = threading.Lock()
 
 
@@ -380,7 +387,10 @@ def _host_of(req: V1RequestBase):
 def _remember_engine(host, name: str):
     if host:
         with _DOMAIN_LOCK:
+            _DOMAIN_ENGINE.pop(host, None)
             _DOMAIN_ENGINE[host] = name
+            while len(_DOMAIN_ENGINE) > _MAX_REMEMBERED_HOSTS:
+                _DOMAIN_ENGINE.popitem(last=False)
 
 
 def _recalled_engine(host):
@@ -484,6 +494,12 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
                          order[i - 1].name, engine.name, remaining)
             break
         is_last = i == len(order) - 1
+        if req.tabs_till_verify is not None and engine.presses_checkbox_unaided:
+            # Said out loud rather than dropped: the caller counted tab stops
+            # for an engine that does not walk the tab order, and it reaches the
+            # checkbox anyway, so the request is answered rather than refused.
+            logging.info("Engine '%s' reaches a Turnstile checkbox on its own; "
+                         "the tabs_till_verify count is not needed", engine.name)
         share = remaining if is_last else remaining / (len(order) - i)
         try:
             result = engine.solve(req, method, share)

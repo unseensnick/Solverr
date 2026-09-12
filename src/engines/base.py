@@ -41,6 +41,14 @@ class Engine(ABC):
 
     name: str = "engine"
 
+    # Whether this engine can press a standalone Turnstile checkbox on its own.
+    # An engine that cannot needs the caller's `tabs_till_verify` count to reach
+    # it through the tab order; an engine that can ignores that count, and says
+    # so here rather than dropping the field in silence. Declared, because a
+    # request option that means something on one engine and nothing on the other
+    # is exactly what a caller cannot find out by trying.
+    presses_checkbox_unaided: bool = False
+
     @abstractmethod
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
         """Resolve the challenge for ``req`` and return a ``SolveResult``.

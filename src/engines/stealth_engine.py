@@ -233,6 +233,8 @@ class StealthContext:
 
 class StealthEngine(Engine):
     name = "stealth"
+    # Clicks the checkbox by coordinate, so it needs no tab count to reach one.
+    presses_checkbox_unaided = True
 
     def __init__(self):
         self._runtime = get_runtime()

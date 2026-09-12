@@ -73,6 +73,9 @@ class ChromeEngine(Engine):
     """Solve challenges with a real Chromium driven by undetected_chromedriver."""
 
     name = "chrome"
+    # A checkbox lives in a closed shadow root, so the only way in is the tab
+    # order, and only the caller knows how many stops away it is.
+    presses_checkbox_unaided = False
 
     def __init__(self, sessions):
         # Shared SessionStore; a Chrome session's payload is a live WebDriver.

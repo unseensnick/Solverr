@@ -18,6 +18,8 @@ CHALLENGE = "<html><title>Just a moment...</title>window._cf_chl_opt</html>"
 
 
 class FakeEngine:
+    presses_checkbox_unaided = False
+
     def __init__(self, name, response=SOLVED):
         self.name = name
         self.response = response
@@ -57,6 +59,56 @@ class PerHostMemory(unittest.TestCase):
         self.resolve([FakeEngine("chrome", response=CHALLENGE)])
 
         self.assertIsNone(flaresolverr_service._recalled_engine("example-site.tld"))
+
+
+class HostMemoryBound(unittest.TestCase):
+    """The memory is keyed by a host the client chose, so it has a ceiling."""
+
+    def setUp(self):
+        flaresolverr_service._DOMAIN_ENGINE.clear()
+
+    def tearDown(self):
+        flaresolverr_service._DOMAIN_ENGINE.clear()
+
+    def test_a_client_asking_for_endless_hosts_cannot_grow_it(self):
+        for i in range(flaresolverr_service._MAX_REMEMBERED_HOSTS + 40):
+            flaresolverr_service._remember_engine("host-%d.tld" % i, "stealth")
+
+        self.assertEqual(len(flaresolverr_service._DOMAIN_ENGINE),
+                         flaresolverr_service._MAX_REMEMBERED_HOSTS)
+
+    def test_the_host_asked_for_most_recently_is_the_one_kept(self):
+        for i in range(flaresolverr_service._MAX_REMEMBERED_HOSTS + 1):
+            flaresolverr_service._remember_engine("host-%d.tld" % i, "stealth")
+
+        self.assertEqual(flaresolverr_service._recalled_engine("host-0.tld"), None)
+
+
+class UnneededTabCount(unittest.TestCase):
+    """An engine that needs no tab count says so, rather than dropping it."""
+
+    def setUp(self):
+        flaresolverr_service._DOMAIN_ENGINE.clear()
+
+    def test_the_engine_that_needs_no_count_reports_that_it_ignored_one(self):
+        engine = FakeEngine("stealth")
+        engine.presses_checkbox_unaided = True
+        req = request(tabs_till_verify=2)
+
+        with patch.object(flaresolverr_service, "_engine_plan", lambda r: [engine]),                 self.assertLogs(level="INFO") as logs:
+            flaresolverr_service._resolve_challenge(req, "GET")
+
+        self.assertIn("tabs_till_verify count is not needed", " ".join(logs.output))
+
+    def test_the_engine_that_uses_the_count_says_nothing_about_it(self):
+        engine = FakeEngine("chrome")
+        engine.presses_checkbox_unaided = False
+        req = request(tabs_till_verify=2)
+
+        with patch.object(flaresolverr_service, "_engine_plan", lambda r: [engine]),                 self.assertLogs(level="INFO") as logs:
+            flaresolverr_service._resolve_challenge(req, "GET")
+
+        self.assertNotIn("tabs_till_verify", " ".join(logs.output))
 
 
 class SessionInBothPools(unittest.TestCase):

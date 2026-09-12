@@ -37,6 +37,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A page carrying a site's own Turnstile widget, such as a login form, is no longer treated as an unsolved challenge.** It was sent to the other engine to be solved again and the passthrough refused to cache it, though the page was exactly what was asked for.
 - **A cookie sent as text instead of an object is refused by name, instead of failing the request after the page had already been fetched.** The list was checked, its items were not, so the error arrived late, named a Python type, and cost an attempt on the other engine first.
 - **The Chrome browser's interface language is set from one tag again.** It was taking the `Accept-Language` header's `"de-DE, de"` pair as its `--lang` value, which no ordinary browser sends.
+- **Per-host engine memory is now capped at 500 hosts, so a deployment that reaches many different sites cannot grow it for the life of the process.** Past the cap the host asked for longest ago is forgotten, which costs it one routing decision.
+- **A `tabs_till_verify` count sent to the Camoufox engine is now reported in the log as not needed, instead of being dropped without a word.** That engine reaches the checkbox by coordinate, so the count has nothing to do; each engine now declares whether it needs one.
 - **Form POST requests from Prowlarr work again, instead of failing with "Request parameter 'headers' must be a list".** 1.6.0 started checking the type of the deprecated `headers` field, which Solverr has never read and which clients send as an object; it is accepted in any shape again and still ignored.
 
 ## [1.6.0]
