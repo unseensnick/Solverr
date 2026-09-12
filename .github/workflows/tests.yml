@@ -30,3 +30,30 @@ jobs:
 
       - name: Run the suite
         run: PYTHONPATH=src uv run --no-project python -m unittest discover -s src -p 'test_*.py' -t src
+
+      # A test that reads a setting out of the ambient environment passes on a
+      # bare runner and fails on the deployer who set it, which is invisible
+      # until someone runs the suite that way. One pass per documented setting
+      # that changes behaviour keeps that from coming back.
+      - name: Run the suite under each documented setting
+        run: |
+          set -u
+          failed=0
+          for setting in \
+            RESPONSE_HEADERS=true \
+            PROXY_URL=http://127.0.0.1:8080 \
+            DEFAULT_ENGINE=stealth \
+            BROWSER_TIMEZONE=Europe/Berlin \
+            LANG=de-DE \
+            PASSTHROUGH_ENABLED=true \
+            PROMETHEUS_ENABLED=true \
+            MAX_TIMEOUT_MS=30000
+          do
+            echo "::group::$setting"
+            if ! env "$setting" PYTHONPATH=src uv run --no-project python -m unittest discover -s src -p 'test_*.py' -t src; then
+              echo "::error::the browser-free suite fails under $setting"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
