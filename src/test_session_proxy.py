@@ -116,6 +116,19 @@ class SessionProxy(unittest.TestCase):
 
         self.assertEqual(builder.proxies, [PROXY, PROXY])
 
+    def test_a_session_created_without_a_proxy_is_rebuilt_without_one(self):
+        # "No proxy" is a choice the session was created with, so a later
+        # request carrying one does not redirect it either.
+        builder = _Builder()
+        store = store_with(builder)
+        store.create("s")
+        store.sessions["s"].last_used = datetime.now() - timedelta(hours=2)
+        store.reap_idle(timedelta(minutes=30))
+
+        store.get("s", proxy={"url": "http://someone-elses:1"})
+
+        self.assertEqual(builder.proxies, [None, None])
+
     def test_destroying_a_session_forgets_its_proxy(self):
         builder = _Builder()
         store = store_with(builder)

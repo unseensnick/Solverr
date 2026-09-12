@@ -55,6 +55,10 @@ _PROXY_BY_ID_LOCK = threading.Lock()
 # the map without limit.
 _PROXY_MEMORY = 1024
 
+# Told apart from "remembered as having no proxy": a session created without one
+# must be rebuilt without one, not on whatever proxy the next request carries.
+_UNKNOWN_SESSION = object()
+
 
 def _remember_proxy(session_id: str, proxy: Optional[dict]) -> None:
     with _PROXY_BY_ID_LOCK:
@@ -64,9 +68,10 @@ def _remember_proxy(session_id: str, proxy: Optional[dict]) -> None:
             _PROXY_BY_ID.popitem(last=False)
 
 
-def _recall_proxy(session_id: str) -> Optional[dict]:
+def _recall_proxy(session_id: str):
+    """The proxy this id was created with, or ``_UNKNOWN_SESSION``."""
     with _PROXY_BY_ID_LOCK:
-        return _PROXY_BY_ID.get(session_id)
+        return _PROXY_BY_ID.get(session_id, _UNKNOWN_SESSION)
 
 
 def _forget_proxy(session_id: str) -> None:
@@ -180,7 +185,7 @@ class SessionStore:
         # ignores a request proxy when a session is named, so a request that
         # rebuilds a reaped or expired session must not redirect its exit.
         remembered = _recall_proxy(session_id)
-        if remembered is not None:
+        if remembered is not _UNKNOWN_SESSION:
             proxy = remembered
 
         # claim=True: the session comes back already marked, taken under the same
