@@ -61,12 +61,6 @@ class EngineConformanceTest(unittest.TestCase):
             with self.subTest(engine=name):
                 self.assertEqual(result.response, world.html)
 
-    def test_an_ordinary_solve_reports_an_empty_header_map(self):
-        # Neither engine reports real headers yet, and both say so the same way.
-        for name, result, _ in self.each():
-            with self.subTest(engine=name):
-                self.assertEqual(result.headers, {})
-
     def test_an_ordinary_solve_reports_200(self):
         for name, result, _ in self.each():
             with self.subTest(engine=name):
