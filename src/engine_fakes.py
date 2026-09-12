@@ -50,6 +50,10 @@ class World:
     title: str = "Example"
     html: str = "<html><body>ok</body></html>"
     url: str = "https://example-site.tld/"
+    # Where the browser ended up, when a challenge sent it somewhere else. The
+    # request still asks for `url`, so a result that reports the requested URL
+    # rather than the answering one is visible.
+    final_url: str = ""
     user_agent: str = "UA/1.0"
     screenshot: bytes = b"\x89PNG-bytes"
     cookies_at_load: list = field(default_factory=lambda: list(LOADED))
@@ -114,7 +118,7 @@ class _SeleniumDriver:
         self._world = world
         self.waited = False
         self.switch_to = _SwitchTo()
-        self.current_url = world.url
+        self.current_url = world.final_url or world.url
         self.page_source = world.html
 
     @property
@@ -253,7 +257,7 @@ class _PlaywrightPage:
         self.world = world
         self.waited = False
         self.closed = False
-        self.url = world.url
+        self.url = world.final_url or world.url
         self.context = _PlaywrightContext(self)
         self.main_frame = object()
         self._response_handlers = []

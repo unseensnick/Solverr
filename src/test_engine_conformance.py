@@ -62,6 +62,14 @@ class EngineConformanceTest(unittest.TestCase):
             with self.subTest(engine=name):
                 self.assertEqual(result.response, world.html)
 
+    def test_the_reported_url_is_the_page_that_answered(self):
+        # Not the URL the caller asked for: a challenge redirects, and a client
+        # that follows solution.url has to reach what was actually returned.
+        world = World(final_url="https://example-site.tld/after-redirect")
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                self.assertEqual(harness.solve(world).url, world.final_url)
+
     def test_an_ordinary_solve_reports_200(self):
         for name, result, _ in self.each():
             with self.subTest(engine=name):
