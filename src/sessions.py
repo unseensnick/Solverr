@@ -69,9 +69,17 @@ def _remember_proxy(session_id: str, proxy: Optional[dict]) -> None:
 
 
 def _recall_proxy(session_id: str):
-    """The proxy this id was created with, or ``_UNKNOWN_SESSION``."""
+    """The proxy this id was created with, or ``_UNKNOWN_SESSION``.
+
+    Reading counts as use: the cap evicts the least recently *used* id, so a
+    session in daily service is never the one dropped, and the entry a rebuild
+    depends on is still there when the rebuild comes.
+    """
     with _PROXY_BY_ID_LOCK:
-        return _PROXY_BY_ID.get(session_id, _UNKNOWN_SESSION)
+        if session_id not in _PROXY_BY_ID:
+            return _UNKNOWN_SESSION
+        _PROXY_BY_ID.move_to_end(session_id)
+        return _PROXY_BY_ID[session_id]
 
 
 def _forget_proxy(session_id: str) -> None:
@@ -127,7 +135,6 @@ class SessionStore:
 
         # Build outside the lock (launching a browser takes seconds).
         session = Session(session_id, self._build(proxy), datetime.now(), proxy=proxy)
-        _remember_proxy(session_id, proxy)
 
         with self._lock:
             race = self.sessions.get(session_id)
@@ -137,10 +144,12 @@ class SessionStore:
                 self._claim(race if race is not None else session)
         if race is not None:
             # Another thread created the session while we were launching ours;
-            # discard the extra browser and use theirs.
+            # discard the extra browser and use theirs. Their proxy is the one
+            # the session has, so ours must not be the one remembered either.
             self._teardown(session)
             return race, False
 
+        _remember_proxy(session_id, proxy)
         return session, True
 
     def _claim(self, session: Session) -> None:
@@ -158,9 +167,19 @@ class SessionStore:
         The function returns True if session was found and destroyed,
         and False if session_id wasn't found.
         """
+        _forget_proxy(session_id)
+        return self.discard(session_id)
+
+    def discard(self, session_id: str) -> bool:
+        """Close a session's browser but keep the id's proxy.
+
+        For a browser that can no longer be trusted (a solve that timed out with
+        a command still in flight, say) rather than one the client is done with:
+        the next request for this id rebuilds it, and rebuilds it on the same
+        exit, which is what ``destroy`` deliberately forgets.
+        """
         with self._lock:
             session = self.sessions.pop(session_id, None)
-        _forget_proxy(session_id)
         if session is None:
             return False
         self._teardown(session)

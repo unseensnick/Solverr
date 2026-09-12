@@ -122,10 +122,27 @@ class ChromeEngine(Engine):
             else:
                 driver = utils.get_webdriver(req.proxy)
                 logging.debug('New instance of webdriver has been created to perform the request')
-            _apply_timezone(driver, browser_proxy)
             left = budget.remaining_share(started, timeout)
+            if left > budget.SOLVE_MARGIN_SECONDS:
+                # Skipped when the launch has already spent the share: the zone
+                # comes from a lookup that is cold for a proxy nobody has
+                # resolved yet, and paying for it here would leave the solve the
+                # one-second floor and an instant timeout. A browser in the
+                # container's timezone still solves.
+                _apply_timezone(driver, browser_proxy)
+                left = budget.remaining_share(started, timeout)
+            else:
+                logging.debug("no budget left to set the browser timezone")
             return func_timeout(left, self._evil_logic, (req, driver, method, left))
         except FunctionTimedOut:
+            # func_timeout stops the worker thread asynchronously, so the driver
+            # command it was in the middle of can still be running when we get
+            # here. Handing the session to the next request would put two
+            # requests on one browser, which is what the lock exists to stop, so
+            # the browser goes instead: the next request on this id builds a
+            # fresh one, on the same proxy. Sessionless drivers are quit below.
+            if req.session:
+                self._sessions.discard(req.session)
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
@@ -196,12 +213,14 @@ class ChromeEngine(Engine):
         if method != "POST" and req.tabs_till_verify is not None:
             deadline = budget.solve_deadline(started, timeout)
             turnstile_token = _resolve_turnstile_captcha(driver, req.tabs_till_verify, deadline)
-        elif method != "POST":
+        else:
             # No count, so there is no way to press the checkbox, but a widget
             # the page solved by itself still carries a token and the stealth
-            # engine reports it. Read-only, and without the grace period a late
-            # widget gets above: that wait is only worth paying when there is a
-            # count to press with.
+            # engine reports it. POST is not excluded here the way pressing is:
+            # reading costs nothing and the stealth engine reads it either way,
+            # so excluding it would make the field mean two things again.
+            # Read-only, and without the grace period a late widget gets above:
+            # that wait is only worth paying when there is a count to press with.
             turnstile_token = _turnstile_token_value(driver)
 
         # wait for the page
@@ -210,15 +229,17 @@ class ChromeEngine(Engine):
         html_element = driver.find_element(By.TAG_NAME, "html")
 
         # The verdict rule is shared with the stealth engine (pipeline.py); only
-        # the two looks below are Chrome's. turnstile_is_a_challenge is False
-        # here: without a tabs_till_verify count there is no way to reach the
-        # checkbox, so treating a bare widget as a challenge would spend the
-        # whole budget in a wait loop that cannot win.
+        # the two looks below are Chrome's. Whether a bare widget counts as a
+        # challenge is the same fact as whether this engine can press one, so it
+        # is read off the capability rather than written out a second time:
+        # without a tabs_till_verify count there is no way to reach the checkbox,
+        # and treating the widget as a challenge would spend the whole budget in
+        # a wait loop that cannot win.
         found, _is_turnstile, reason = pipeline.run({
             pipeline.Look.TITLE: lambda _arg: driver.title,
             pipeline.Look.SELECTOR: lambda selector: bool(
                 driver.find_elements(By.CSS_SELECTOR, selector)),
-        }, turnstile_is_a_challenge=False)
+        }, turnstile_is_a_challenge=self.presses_checkbox_unaided)
 
         if found is pipeline.Verdict.DENIED:
             raise Exception(pipeline.BLOCKED_MESSAGE)

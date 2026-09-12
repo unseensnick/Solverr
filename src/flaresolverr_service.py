@@ -506,6 +506,14 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
         except Exception as e:
             last_error = e
             if is_last:
+                if last_result is not None:
+                    # An earlier engine did return a page, it just looked
+                    # challenged. Raising here threw it away and answered with
+                    # this engine's error, so adding a fallback engine made the
+                    # response worse than having none.
+                    logging.info("Engine '%s' failed (%s); returning the page the previous "
+                                 "engine did produce", engine.name, e)
+                    break
                 raise
             logging.warning("Engine '%s' failed (%s); falling back to '%s'...",
                             engine.name, e, order[i + 1].name)

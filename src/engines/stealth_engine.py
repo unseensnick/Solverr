@@ -507,12 +507,16 @@ class StealthEngine(Engine):
                 # a timeout error.
                 deadline = budget.solve_deadline(started, timeout)
                 if config.api_solver_enabled():
-                    # Leave the escalation room to work. It is a network round
-                    # trip to the provider and back, so starting it after the
-                    # solve deadline left it whatever the response margin was,
-                    # and configuring a paid solver turned "still challenged"
-                    # (which the other engine can retry) into a timeout.
-                    deadline -= _API_SOLVE_SECONDS
+                    # Leave the escalation room to work, but only when there is
+                    # room for both. It is a network round trip to the provider
+                    # and back, so starting it after the solve deadline left it
+                    # whatever the response margin was and it never finished.
+                    # Taking the reserve out of a share that cannot fit both is
+                    # worse than not escalating: it cancels the free solve for a
+                    # paid one that cannot finish either.
+                    room = deadline - asyncio.get_running_loop().time()
+                    if room > 2 * _API_SOLVE_SECONDS:
+                        deadline -= _API_SOLVE_SECONDS
                 # Both kinds are handled on the context's own page: an interstitial
                 # clears itself, and a widget is clicked by coordinate, so neither
                 # needs the solver's init scripts. Only the paid escalation below
@@ -902,7 +906,7 @@ class StealthEngine(Engine):
         found, is_turnstile, _reason = await pipeline.run_async({
             pipeline.Look.TITLE: lambda _arg: page.title(),
             pipeline.Look.SELECTOR: lambda selector: _present(page, selector),
-        }, turnstile_is_a_challenge=True)
+        }, turnstile_is_a_challenge=self.presses_checkbox_unaided)
         if found is pipeline.Verdict.DENIED:
             return "denied", False
         return ("challenge" if found is pipeline.Verdict.CHALLENGE else "none"), is_turnstile

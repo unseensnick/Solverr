@@ -125,6 +125,16 @@ class SharedBudget(unittest.TestCase):
 
         self.assertEqual(res.result.response, CHALLENGE)
 
+    def test_a_failing_last_engine_still_returns_the_page_the_first_one_got(self):
+        # Adding a fallback engine must not make the answer worse than having
+        # none: the challenge page the first engine returned is still a page.
+        first = FakeEngine("chrome", response=CHALLENGE)
+        second = FakeEngine("stealth", raises="browser did not start")
+
+        res = resolve([first, second])
+
+        self.assertEqual(res.result.response, CHALLENGE)
+
     def test_a_spent_budget_reports_the_first_engine_error_not_a_timeout(self):
         first = FakeEngine("chrome", raises="Cloudflare has blocked this request.", spends=58.0)
 
@@ -150,8 +160,9 @@ class LaunchInsideTheShare(unittest.TestCase):
         import utils
         from engines.chrome_engine import ChromeEngine
         # One clock: budget and the engine both read the same time module. The
-        # launch between the two reads costs five of the thirty seconds.
-        clock = iter([0.0, 5.0])
+        # launch costs five of the thirty seconds; the reads after it are the
+        # budget check around the timezone and the share handed to the solve.
+        clock = iter([0.0, 5.0, 5.0])
         granted = []
 
         def timed(seconds, func, args):
@@ -233,25 +244,35 @@ class PostSolveSettle(unittest.TestCase):
 class PaidEscalationBudget(unittest.TestCase):
     """A configured paid solver gets time to work, taken out of the solve."""
 
-    def deadline_given(self, escalation_configured):
+    def free_solve_window(self, escalation_configured, room):
+        """Seconds the free click-solve is given, with `room` left to share."""
+        import asyncio
         from engine_fakes import StealthHarness, World
         from engines.stealth_engine import StealthEngine
         seen = []
 
+        def fake_deadline(_started, _timeout):
+            return asyncio.get_running_loop().time() + room
+
         async def fake_wait(_self, _page, deadline):
-            seen.append(deadline)
+            seen.append(round(deadline - asyncio.get_running_loop().time(), 1))
             return True
 
         with patch.object(stealth_engine.config, "api_solver_enabled",
-                          lambda: escalation_configured), \
-                patch.object(stealth_engine.budget, "solve_deadline", lambda *_a: 1000.0), \
-                patch.object(StealthEngine, "_wait_until_cleared", fake_wait):
+                          lambda: escalation_configured),                 patch.object(stealth_engine.budget, "solve_deadline", fake_deadline),                 patch.object(StealthEngine, "_wait_until_cleared", fake_wait):
             StealthHarness().solve(World(title=CHALLENGE_TITLE, challenged_for=1))
         return seen[0]
 
-    def test_no_solver_configured_leaves_the_whole_solve_deadline(self):
-        self.assertEqual(self.deadline_given(False), 1000.0)
+    def test_no_solver_configured_leaves_the_whole_solve_window(self):
+        self.assertEqual(self.free_solve_window(False, room=300.0), 300.0)
 
     def test_a_configured_solver_is_kept_its_own_room(self):
-        self.assertEqual(self.deadline_given(True),
-                         1000.0 - stealth_engine._API_SOLVE_SECONDS)
+        self.assertEqual(self.free_solve_window(True, room=300.0),
+                         300.0 - stealth_engine._API_SOLVE_SECONDS)
+
+    def test_a_window_too_small_for_both_keeps_the_free_solve_whole(self):
+        # Around 22 seconds is what the stealth engine gets from the default
+        # budget split two ways. Reserving 30 of it puts the deadline in the
+        # past: one click, then a paid call that cannot finish either.
+        small = stealth_engine._API_SOLVE_SECONDS - 8.0
+        self.assertEqual(self.free_solve_window(True, room=small), small)

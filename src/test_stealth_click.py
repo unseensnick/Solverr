@@ -330,7 +330,9 @@ class ThrowawayClickPage(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *_exc):
                 return False
 
-        world = World(title="Just a moment...", challenged_for=99)
+        # Challenged for longer than the window can poll: the escalation is
+        # only reached by a challenge that never clears on its own.
+        world = World(title="Just a moment...", challenged_for=10 ** 6)
         with patch.object(stealth_engine.config, "api_solver_enabled", lambda: True), \
                 patch.object(stealth_engine, "ClickSolver", _Failing), \
                 patch.multiple(stealth_engine, _POLL_SECONDS=0.01,

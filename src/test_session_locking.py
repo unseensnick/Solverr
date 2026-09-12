@@ -90,3 +90,41 @@ class OneRequestAtATime(unittest.TestCase):
         for name, build in (("chrome", _chrome_engine), ("stealth", _stealth_engine)):
             with self.subTest(engine=name):
                 self.assert_serialised(build)
+
+
+class TimedOutSessionBrowser(unittest.TestCase):
+    """A solve stopped by the timeout leaves a browser nobody can trust.
+
+    func_timeout stops the worker thread asynchronously, so the driver command
+    it was running can still be in flight. Handing that browser to the next
+    request is the thing the lock exists to prevent, so it is closed instead.
+    """
+
+    def solve_timing_out(self):
+        store = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda d: None)
+        store.create("s", {"url": "http://residential:8080"})
+        engine = ChromeEngine(sessions=store)
+        req = V1RequestBase({"url": "https://example-site.tld/", "session": "s"})
+
+        def timed_out(*_a, **_k):
+            raise chrome_engine.FunctionTimedOut("stopped")
+
+        with patch.object(chrome_engine, "_apply_timezone", lambda *_a: None), \
+                patch.object(chrome_engine, "func_timeout", timed_out):
+            try:
+                engine.solve(req, "GET", 5.0)
+            except Exception:
+                pass
+        return store
+
+    def test_the_session_browser_is_closed(self):
+        self.assertNotIn("s", self.solve_timing_out().sessions)
+
+    def test_the_next_request_rebuilds_it_on_the_same_proxy(self):
+        store = self.solve_timing_out()
+        built = []
+        store._build = lambda proxy=None: built.append(proxy) or MagicMock()
+
+        store.get("s")
+
+        self.assertEqual(built, [{"url": "http://residential:8080"}])
