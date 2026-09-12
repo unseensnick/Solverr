@@ -120,7 +120,11 @@ Fallback triggers when an engine throws (blocked / timeout), or returns a page t
 
 A **session** keeps a browser alive between requests. The cleared `cf_clearance` cookie stays in that browser's memory, so follow-up requests to the same host skip the challenge and return in 1–3 s instead of re-solving. This is the main reliability and speed lever: solve once, reuse the cookie many times.
 
-Each engine keeps its own session pool under one shared session-id namespace; a session is bound to whichever engine created it (default Chrome). Create one with `sessions.create` and pass its `session` id on later requests.
+Each engine keeps its own session pool under one shared session-id namespace; a session is bound to whichever engine created it, `DEFAULT_ENGINE` unless the request names one. Create one with `sessions.create` and pass its `session` id on later requests.
+
+A session keeps the proxy it was created with. Its browser is rebuilt whenever its lifetime runs out, the idle cleanup closes it, the cap evicts it, or the other engine takes a request over, and every rebuild goes back out through that same proxy rather than through the server's own address. `sessions.destroy` forgets it.
+
+A session is one browser with one page, so two requests naming it take it in turn rather than at once. The wait counts against the second request's own `maxTimeout`, and a request that waits longer than that is told the session was busy instead of being answered with the other request's page.
 
 Clients often create a session and never destroy it (a mobile app can be killed before it could). To stop abandoned browsers leaking memory, Solverr runs a **background reaper** that:
 
@@ -160,7 +164,7 @@ Launches a browser that retains cookies until you `sessions.destroy` it (or the 
 | Parameter | Notes                                                                                                                                                                                             |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | session   | Optional. Session id to assign. A random UUID is used if omitted.                                                                                                                                |
-| engine    | Optional. `chrome` (default) or `stealth`. Binds the session to that engine.                                                                                                                     |
+| engine    | Optional. `chrome` or `stealth`; binds the session to that engine. Omitted or `auto`, it follows `DEFAULT_ENGINE`, so a Chrome session unless that names `stealth`. An id already live on either engine is reported back rather than opened a second time. |
 | proxy     | Optional. Eg `"proxy": {"url": "http://127.0.0.1:8888"}`. Schema required (`http://`, `socks4://`, `socks5://`). Auth supported: `{"url": "...", "username": "user", "password": "pass"}`. |
 
 ### `sessions.list`
@@ -187,13 +191,13 @@ Shuts a session's browser down and frees its resources.
 | engine              | Optional. `chrome`, `stealth`, or `auto` (default). See [Engines & fallback](#engines--fallback).                                                                |
 | session             | Optional. Reuse an existing browser instance. Without it, a temporary instance is created and destroyed after the request.                                      |
 | session_ttl_minutes | Optional. Recreate the session if it is older than this many minutes.                                                                                            |
-| maxTimeout          | Optional, default 60000. Max time to answer the request, in milliseconds. It covers the whole request, so a fallback to the other engine shares it rather than starting a fresh one. Clamped to `MAX_TIMEOUT_MS` (default 180000). |
+| maxTimeout          | Optional, default 60000. Max time to answer the request, in milliseconds. It covers the whole request, starting a browser included, so a fallback to the other engine shares it rather than starting a fresh one. Clamped to `MAX_TIMEOUT_MS` (default 180000), and so is the default when the field is omitted. |
 | cookies             | Optional. Cookies to set before loading. Eg `"cookies": [{"name": "a", "value": "1"}]`.                                                                          |
 | returnOnlyCookies   | Optional, default false. Return only cookies; drop response body and headers.                                                                                    |
 | returnScreenshot    | Optional, default false. Return a Base64 PNG of the final page in the `screenshot` field.                                                                        |
 | proxy               | Optional. Same shape as in `sessions.create`. Ignored when `session` is set (use a session proxy instead).                                                       |
 | waitInSeconds       | Optional. Extra seconds to wait after solving, before returning (lets dynamic content load).                                                                     |
-| disableMedia        | Optional, default false. Block images, CSS and fonts to speed up navigation.                                                                                     |
+| disableMedia        | Optional, default false. Block images, CSS and fonts to speed up navigation. The same three on both engines, and only for the request that asks: a session is not left blocking media for the requests after it. |
 | tabs_till_verify    | Optional (Chrome engine only). Number of `Tab` presses to reach a Turnstile checkbox; the resulting token is returned in `solution.turnstile_token`. Waits up to 5 seconds for a widget that renders after the page loads, so a page with no widget at all costs that long before the request continues without a token. Pressing stops in time to still return a page if the checkbox never yields one. The stealth engine detects Turnstile automatically and does not need this. |
 
 > **Finding the right `tabs_till_verify`.** It is the number of `Tab` presses from the top of the document to the checkbox, so it depends on how many focusable elements the page puts before the widget. A widget with nothing focusable ahead of it is `1`. Find yours by sending the same request with `1`, `2`, `3` and so on: the value that comes back with a filled `solution.turnstile_token` is the one. Use a small `maxTimeout` while you search, because a wrong count spends the whole budget pressing before it gives up.
@@ -287,6 +291,7 @@ Notes and limits:
 
 - **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
 - Encode the mirror as a **bare host** (`example-site.tld`), not `https://…`, because clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
+- Static assets are answered `404` rather than solved: a path ending in a script, stylesheet, image, font or video extension is never worth a browser. The check reads the path only, so a page whose query string happens to end that way is still fetched.
 - Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
 - The cache holds at most `PASSTHROUGH_CACHE_MAX_BYTES` in total. The TTL alone bounded how long a body was kept but not how much was kept, so a client walking many pages inside one TTL window could hold all of them at once.
 - It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
@@ -313,7 +318,7 @@ All settings are environment variables and all are optional.
 | `SESSION_TTL_MINUTES`     | `30`    | Idle minutes before the reaper closes a session's browser (`0` or less disables idle reaping). |
 | `SESSION_MAX`             | `20`    | Max concurrent sessions per engine before oldest-idle eviction (`0` or less disables the cap). |
 | `REAPER_INTERVAL_SECONDS` | `60`    | How often the reaper scans.                                              |
-| `MAX_TIMEOUT_MS`          | `180000` | Ceiling on a request's `maxTimeout` (`0` lifts it). A larger request is clamped to this with a warning rather than refused, so existing callers keep working. |
+| `MAX_TIMEOUT_MS`          | `180000` | Ceiling on a request's `maxTimeout` (`0` lifts it). A larger request is clamped to this with a warning rather than refused, so existing callers keep working. Set below `60000` and it bounds a request that sends no `maxTimeout` at all too. |
 
 ### Proxy
 
@@ -341,7 +346,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | Variable                   | Default   | Description                                                                    |
 | -------------------------- | --------- | ----------------------------------------------------------------------------- |
 | `PASSTHROUGH_ENABLED`      | `false`   | Turn the passthrough listener on.                                              |
-| `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = refuse every request, so it's never a blind open proxy. |
+| `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = every request is answered `404`, so it's never a blind open proxy. |
 | `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
 | `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
 | `PASSTHROUGH_CACHE_MAX_BYTES` | `268435456` | Ceiling on the total bytes the cache holds (`0` lifts it). Past the ceiling the soonest-to-expire entries are evicted first. A single body over a quarter of the ceiling is served but not cached. |
@@ -381,7 +386,9 @@ Set something only when you need a specific result. There are three knobs and th
 | `BROWSER_TIMEZONE=Europe/Berlin` and `LANG=de-DE` | `Europe/Berlin`, German | no |
 | `BROWSER_TIMEZONE=auto` | Exit IP, ignoring any `BROWSER_GEO` | once per proxy |
 
-`LANG` and `BROWSER_TIMEZONE` each override `BROWSER_GEO` for their own half, so `BROWSER_GEO=en-US` with `BROWSER_TIMEZONE=America/Chicago` gives American English on Chicago time.
+`LANG` and `BROWSER_TIMEZONE` each override `BROWSER_GEO` for their own half, so `BROWSER_GEO=en-US` with `BROWSER_TIMEZONE=America/Chicago` gives American English on Chicago time. Pin both halves and nothing is looked up; pin one and the lookup that remains is the other half's alone, so it no longer resolves a zone that was never going to be used.
+
+"Per proxy" means per proxy account, not per proxy server: residential providers pick the exit country through the username, so two accounts on one endpoint each resolve their own country rather than sharing whichever was looked up first.
 
 **`BROWSER_GEO`** is the short way to match a proxy that always leaves from the same country. It costs no lookup at all, which also makes it the right choice for a deployment with no outbound access beyond its proxy. The timezone it picks is written to the log at startup, because a country with several zones gets its most populous one rather than a fact: `BROWSER_GEO=en-US` gives `America/New_York`. Set `BROWSER_TIMEZONE` if that isn't the one you want. A tag with no country in it, such as `fr`, sets the language only.
 
