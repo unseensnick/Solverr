@@ -50,6 +50,44 @@ class RequestLogTest(unittest.TestCase):
         self.assertIn("password=", self.logged(cmd="request.post", postData="user=me&password=%s" % SECRET))
 
 
+class MalformedRequestLogTest(unittest.TestCase):
+    """The request is logged before anything checks its types.
+
+    Every field below is one the boundary is about to refuse by name, but the log
+    line has already been written by then, so redaction cannot assume the shape
+    it expects.
+    """
+
+    def logged(self, **fields):
+        req = V1RequestBase(dict({"cmd": "request.get", "url": "https://example-site.tld/"}, **fields))
+        return _logged(self, req, V1ResponseBase({}))
+
+    def test_a_proxy_sent_as_a_string_keeps_its_password_out(self):
+        self.assertNotIn(SECRET, self.logged(proxy="http://me:%s@proxy.example-site.tld:8080" % SECRET))
+
+    def test_cookies_sent_as_an_object_keep_their_values_out(self):
+        self.assertNotIn(SECRET, self.logged(cookies={"session": SECRET}))
+
+    def test_cookies_sent_as_a_string_are_kept_out(self):
+        self.assertNotIn(SECRET, self.logged(cookies="session=%s" % SECRET))
+
+    def test_a_cookie_item_that_is_not_an_object_is_kept_out(self):
+        self.assertNotIn(SECRET, self.logged(cookies=["session=%s" % SECRET]))
+
+    def test_post_data_sent_as_an_object_keeps_its_values_out(self):
+        self.assertNotIn(SECRET, self.logged(cmd="request.post", postData={"password": SECRET}))
+
+    def test_headers_sent_as_a_list_are_kept_out(self):
+        self.assertNotIn(SECRET, self.logged(headers=[{"name": "Cookie", "value": SECRET}]))
+
+    def test_an_authorization_header_is_kept_out(self):
+        self.assertNotIn(SECRET, self.logged(headers={"Authorization": "Bearer %s" % SECRET}))
+
+    def test_an_unparseable_proxy_url_is_kept_out(self):
+        # A URL urlsplit refuses outright, here an unclosed IPv6 host.
+        self.assertNotIn(SECRET, self.logged(proxy={"url": "http://u:%s@[::1" % SECRET}))
+
+
 class ResponseLogTest(unittest.TestCase):
 
     def logged(self, **solution):

@@ -31,6 +31,7 @@ import time
 from typing import Optional
 
 import config
+import redact
 
 # A resolved zone outlives a browser: a session keeps its launch-time timezone
 # for as long as it lives, so caching for the session TTL is no staler than
@@ -365,10 +366,13 @@ def _from_egress(proxy_config: Optional[dict]) -> tuple:
         session = prepare("", proxy_config)
         zone, egress_ip = (session.timezone or None), session.egress_ip
     except Exception as e:
-        # Server only, never the dict: it carries the proxy password.
+        # Server only, never the dict, and redacted: a proxy URL can carry its
+        # own password in the userinfo, and the library's message quotes back
+        # the URL it built from the username and password it was given.
+        server = (proxy_config or {}).get("server")
         logging.warning("could not resolve a timezone for %s (%s); using %s",
-                        (proxy_config or {}).get("server") or "the direct connection",
-                        e, container_timezone())
+                        redact.url(server) if server else "the direct connection",
+                        redact.proxy_text(str(e), proxy_config), container_timezone())
 
     try:
         language = resolve_locale(egress_ip, proxy_config) or None

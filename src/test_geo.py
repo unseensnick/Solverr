@@ -28,7 +28,8 @@ def _tz(proxy):
 def _env(**overrides):
     """os.environ with BROWSER_TIMEZONE and TZ set only as given."""
     env = {k: v for k, v in os.environ.items()
-           if k not in ('BROWSER_TIMEZONE', 'BROWSER_GEO', 'LANG', 'TZ', 'SESSION_TTL_MINUTES')}
+           if k not in ('BROWSER_TIMEZONE', 'BROWSER_GEO', 'LANG', 'TZ', 'SESSION_TTL_MINUTES',
+                        'PROXY_URL', 'PROXY_USERNAME', 'PROXY_PASSWORD')}
     env.update({k: v for k, v in overrides.items() if v is not None})
     return patch.dict(os.environ, env, clear=True)
 
@@ -182,6 +183,23 @@ class ResolutionFailureTest(unittest.TestCase):
             raise RuntimeError("nope")
         with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')), \
              self.assertLogs(level='WARNING') as logs:
+            geo._from_egress(geo.proxy_to_config(PROXY))
+        self.assertNotIn('s3cr3t-pass', logs.output[0])
+
+    def test_a_password_inside_the_proxy_url_is_never_logged(self):
+        def boom(*_args):
+            raise RuntimeError("nope")
+        inline = {"url": "http://proxyuser:s3cr3t-pass@proxy.tld:8080"}
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')),              self.assertLogs(level='WARNING') as logs:
+            geo._from_egress(geo.proxy_to_config(inline))
+        self.assertNotIn('s3cr3t-pass', logs.output[0])
+
+    def test_a_password_the_resolver_quotes_back_is_never_logged(self):
+        # invisible_core builds its own credentialed URL and puts it in the
+        # error, so the message carries the password the config kept separate.
+        def boom(*_args):
+            raise RuntimeError("Failed to parse: http://proxyuser:s3cr3t-pass@proxy.tld:8080")
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')),              self.assertLogs(level='WARNING') as logs:
             geo._from_egress(geo.proxy_to_config(PROXY))
         self.assertNotIn('s3cr3t-pass', logs.output[0])
 
@@ -407,3 +425,41 @@ class EnvProxyTest(unittest.TestCase):
         with patch.dict(os.environ, {'PROXY_URL': 'http://p:1', 'PROXY_USERNAME': 'u',
                                      'PROXY_PASSWORD': 'x'}, clear=True):
             self.assertIn('username', geo.proxy_to_config(config.env_proxy()))
+
+
+class EnvProxyInjectionTest(unittest.TestCase):
+    """What the /v1 route puts on a request that carries no proxy of its own."""
+
+    def injected(self, **env):
+        import flaresolverr
+        data = {"cmd": "request.get", "url": "https://example-site.tld/"}
+        seen = {}
+
+        class _Req:
+            json = data
+
+        class _Res:
+            __error_500__ = False
+
+        def handler(req):
+            seen['proxy'] = req.proxy
+            return _Res()
+
+        with _env(**env), \
+                patch.object(flaresolverr, 'request', _Req), \
+                patch.object(flaresolverr.flaresolverr_service, 'controller_v1_endpoint',
+                             handler):
+            flaresolverr.controller_v1()
+        return seen['proxy']
+
+    def test_an_empty_proxy_url_means_no_proxy(self):
+        self.assertIsNone(self.injected(PROXY_URL=''))
+
+    def test_a_configured_proxy_url_is_injected(self):
+        self.assertEqual(self.injected(PROXY_URL='http://proxy.tld:8080'),
+                         {"url": "http://proxy.tld:8080"})
+
+    def test_configured_credentials_are_injected_with_it(self):
+        self.assertEqual(self.injected(PROXY_URL='http://proxy.tld:8080',
+                                       PROXY_USERNAME='me', PROXY_PASSWORD='pw'),
+                         {"url": "http://proxy.tld:8080", "username": "me", "password": "pw"})
