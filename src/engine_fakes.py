@@ -74,6 +74,9 @@ class World:
     blocked_kinds: set = field(default_factory=set)
     # Whether the engine took its routing back off at the end of the request.
     unrouted: bool = False
+    # Extra pages the engine opened (the throwaway solver page), and whether it
+    # closed them again: one left open leaks into a session's context.
+    extra_pages: list = field(default_factory=list)
     # What the engine actually handed its browser, so a refused cookie shows up.
     cookies_set: list = field(default_factory=list)
 
@@ -227,6 +230,11 @@ class _PlaywrightContext:
                     for c in self._page.world.foreign_cookies]
         return out
 
+    async def new_page(self):
+        page = _PlaywrightPage(self._page.world)
+        self._page.world.extra_pages.append(page)
+        return page
+
     async def add_cookies(self, cookies):
         for cookie in cookies:
             # Playwright's own rule, and it refuses the whole batch on one bad
@@ -244,6 +252,7 @@ class _PlaywrightPage:
     def __init__(self, world: World):
         self.world = world
         self.waited = False
+        self.closed = False
         self.url = world.url
         self.context = _PlaywrightContext(self)
         self.main_frame = object()
@@ -273,6 +282,9 @@ class _PlaywrightPage:
 
     async def screenshot(self):
         return self.world.screenshot
+
+    async def close(self):
+        self.closed = True
 
     async def route(self, _pattern, handler):
         # Ask the engine's own handler about one fetch of each kind, which is

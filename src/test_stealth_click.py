@@ -8,12 +8,14 @@ Run: PYTHONPATH=src uv run --no-project python -m unittest test_stealth_click
 """
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from playwright_captcha import CaptchaType
 
 import pipeline
 from detection import ACCESS_DENIED_TITLES, TURNSTILE_SELECTORS
+from engines import stealth_engine
 from engines.stealth_engine import StealthEngine
 
 TOKEN_INPUT = TURNSTILE_SELECTORS[0]
@@ -288,3 +290,58 @@ class ChallengeWait(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueuedOnTheContext(unittest.IsolatedAsyncioTestCase):
+    """Waiting for the context to be free is spent from the same budget."""
+
+    async def test_the_wait_for_the_context_comes_out_of_the_budget(self):
+        from dtos import V1RequestBase
+        eng = engine()
+        ctx = SimpleNamespace(lock=asyncio.Lock(), page=None)
+        granted = []
+
+        async def fake_solve(_req, _ctx, _method, timeout):
+            granted.append(timeout)
+            return "solved"
+
+        eng._navigate_and_solve = fake_solve
+        await ctx.lock.acquire()
+
+        async def release_soon():
+            await asyncio.sleep(0.2)
+            ctx.lock.release()
+
+        asyncio.create_task(release_soon())
+        await eng._do_solve(V1RequestBase({"url": "https://example.tld/"}), ctx, "GET", 5.0)
+
+        self.assertLess(granted[0], 5.0)
+
+
+class ThrowawayClickPage(unittest.IsolatedAsyncioTestCase):
+    """The page the paid solver runs on is closed even when it never starts."""
+
+    def test_a_solver_that_fails_to_start_leaves_no_page_open(self):
+        from engine_fakes import StealthHarness, World
+
+        class _Failing:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                raise Exception("solver could not be prepared")
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        world = World(title="Just a moment...", challenged_for=99)
+        with patch.object(stealth_engine.config, "api_solver_enabled", lambda: True), \
+                patch.object(stealth_engine, "ClickSolver", _Failing), \
+                patch.multiple(stealth_engine, _POLL_SECONDS=0.01,
+                               _CHALLENGE_CONFIRM_SECONDS=0.01):
+            try:
+                StealthHarness().solve(world, timeout=1.0)
+            except Exception:
+                pass
+
+        self.assertEqual([page.closed for page in world.extra_pages], [True])

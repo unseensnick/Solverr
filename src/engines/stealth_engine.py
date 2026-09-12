@@ -79,6 +79,10 @@ _CLICK_COOLDOWN_SECONDS = 4
 # 2captcha Turnstile answer takes tens of seconds; without the reservation it
 # began with only the response margin left and never finished.
 _API_SOLVE_SECONDS = 30
+
+# How long a browser gets to shut down. Generous because cutting the teardown
+# short is worse than waiting: the step that reaps the browser process runs last.
+_CLOSE_TIMEOUT_SECONDS = 60
 _POLL_SECONDS = 1.5
 
 # Cloudflare drops the challenge markup while it issues the next round, so a
@@ -267,7 +271,21 @@ class StealthEngine(Engine):
         return ctx
 
     def _close_context(self, ctx: "StealthContext") -> None:
-        self._runtime.run(ctx.close(), timeout=60)
+        self._close_bounded(ctx)
+
+    def _close_bounded(self, ctx: "StealthContext") -> None:
+        """Close a context, and say so when the cap cuts the teardown short.
+
+        The library closes the browser and then stops the driver, and only the
+        second step reaps the browser process, so a teardown cancelled between
+        them leaves one behind. Nothing here can finish that job, so the cap is
+        generous and a request to look is louder than debug.
+        """
+        try:
+            self._runtime.run(ctx.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        except FuturesTimeout:
+            logging.warning("stealth browser did not shut down within %ss; a browser process "
+                            "may be left behind", _CLOSE_TIMEOUT_SECONDS)
 
     def session_ids(self) -> List[str]:
         return self._sessions.session_ids()
@@ -350,14 +368,26 @@ class StealthEngine(Engine):
                 self._sessions.end_use(in_use)
             if own_ctx and ctx is not None:
                 try:
-                    self._runtime.run(ctx.close(), timeout=60)
+                    self._close_bounded(ctx)
                 except Exception:
                     logging.debug("stealth ctx teardown failed", exc_info=True)
 
     async def _do_solve(self, req: V1RequestBase, ctx: StealthContext, method: str,
                         timeout: float) -> SolveResult:
+        # The timeout covers the wait for the context as well as the solve. It
+        # used to start only once the lock was taken, while the caller's hard cap
+        # had been running since the request was submitted, so a queued request
+        # was killed by the outer one with no verdict to hand back.
+        return await asyncio.wait_for(self._locked_solve(req, ctx, method, timeout),
+                                      timeout=timeout)
+
+    async def _locked_solve(self, req: V1RequestBase, ctx: StealthContext, method: str,
+                            timeout: float) -> SolveResult:
+        loop = asyncio.get_running_loop()
+        queued_at = loop.time()
         async with ctx.lock:
-            return await asyncio.wait_for(self._navigate_and_solve(req, ctx, method, timeout), timeout=timeout)
+            left = max(1.0, timeout - (loop.time() - queued_at))
+            return await self._navigate_and_solve(req, ctx, method, left)
 
     async def _navigate_and_solve(self, req: V1RequestBase, ctx: StealthContext,
                                   method: str, timeout: float) -> SolveResult:
@@ -431,6 +461,10 @@ class StealthEngine(Engine):
             nonlocal click, page
             if click is None:
                 target = await ctx.context.new_page()
+                # Registered before the solver is prepared: preparing it can
+                # raise or be cancelled, and the teardown below only closes what
+                # is registered, so the page stayed open in a session's context.
+                click = (target, None, None)
                 solver_cm = ClickSolver(framework=FrameworkType.PLAYWRIGHT, page=target,
                                         max_attempts=config.stealth_max_attempts(),
                                         attempt_delay=1)
@@ -597,7 +631,8 @@ class StealthEngine(Engine):
                         logging.debug("unroute failed", exc_info=True)
             if click is not None:
                 try:
-                    await click[1].__aexit__(None, None, None)
+                    if click[1] is not None:
+                        await click[1].__aexit__(None, None, None)
                 except Exception:
                     logging.debug("click solver teardown failed", exc_info=True)
                 try:
