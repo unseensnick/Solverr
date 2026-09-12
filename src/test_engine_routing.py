@@ -43,8 +43,7 @@ class PerHostMemory(unittest.TestCase):
         flaresolverr_service._DOMAIN_ENGINE.clear()
 
     def resolve(self, engines):
-        with patch.object(flaresolverr_service, "_engine_plan",
-                          lambda r: (engines, len(engines) > 1)):
+        with patch.object(flaresolverr_service, "_engine_plan", lambda r: engines):
             return flaresolverr_service._resolve_challenge(request(), "GET")
 
     def test_a_solved_page_teaches_the_host_its_engine(self):
@@ -72,7 +71,7 @@ class SessionInBothPools(unittest.TestCase):
                           lambda: {"chrome": chrome, "stealth": stealth}), \
                 patch.object(flaresolverr_service, "_pool_has", lambda name, sid: True), \
                 patch.object(flaresolverr_service, "_recalled_engine", lambda host: recalled):
-            order, _fallback = flaresolverr_service._engine_plan(request(session="s"))
+            order = flaresolverr_service._engine_plan(request(session="s"))
         return [engine.name for engine in order]
 
     def test_the_remembered_engine_goes_first(self):

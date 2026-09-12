@@ -73,7 +73,7 @@ def resolve(engines, max_timeout=60000):
 
     req = V1RequestBase({"cmd": "request.get", "url": "https://example-site.tld/",
                          "maxTimeout": max_timeout})
-    with patch.object(flaresolverr_service, "_engine_plan", lambda r: (engines, len(engines) > 1)), \
+    with patch.object(flaresolverr_service, "_engine_plan", lambda r: engines), \
          patch.object(flaresolverr_service.time, "monotonic", monotonic):
         return flaresolverr_service._resolve_challenge(req, "GET")
 
@@ -238,7 +238,7 @@ class PaidEscalationBudget(unittest.TestCase):
         from engines.stealth_engine import StealthEngine
         seen = []
 
-        async def fake_wait(_self, _solver, _page, _captcha_type, deadline):
+        async def fake_wait(_self, _page, deadline):
             seen.append(deadline)
             return True
 

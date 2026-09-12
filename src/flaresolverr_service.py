@@ -1,5 +1,4 @@
 import logging
-import os
 import platform
 import re
 import sys
@@ -34,7 +33,7 @@ def _quit_driver(driver) -> None:
 SESSIONS_STORAGE = SessionStore(build=utils.get_webdriver, teardown=_quit_driver)
 
 # Chrome (Selenium + undetected_chromedriver) is the default engine and owns its
-# own SessionsStorage. The stealth engine (Camoufox + playwright-captcha) is
+# own session store. The stealth engine (Camoufox + playwright-captcha) is
 # loaded lazily so the service still runs on a Chrome-only image or when its
 # heavier dependencies aren't installed.
 CHROME_ENGINE = ChromeEngine(SESSIONS_STORAGE)
@@ -391,13 +390,13 @@ def _recalled_engine(host):
         return _DOMAIN_ENGINE.get(host)
 
 
-def _engine_plan(req: V1RequestBase):
-    """Return (ordered_engines, can_fallback).
+def _engine_plan(req: V1RequestBase) -> list:
+    """The engines to try, in order.
 
-    An explicit ``engine`` forces a single engine (no fallback). Otherwise the
-    primary is chosen from per-domain memory, then the engine already holding the
-    request's session, then DEFAULT_ENGINE; the other engine is appended as a
-    fallback when ENGINE_FALLBACK is on and both engines are available.
+    An explicit ``engine`` forces a single engine. Otherwise the primary is the
+    engine already holding the request's session, then per-domain memory, then
+    DEFAULT_ENGINE; the other engine is appended as a fallback when
+    ENGINE_FALLBACK is on and both engines are available.
     """
     available = _available_engines()
 
@@ -405,7 +404,7 @@ def _engine_plan(req: V1RequestBase):
     if forced in ('chrome', 'stealth'):
         if forced not in available:
             raise Exception(f"Requested engine '{forced}' is not available.")
-        return [available[forced]], False
+        return [available[forced]]
 
     host = _host_of(req)
     # The engine holding the session wins: a session is a specific browser, and
@@ -428,17 +427,17 @@ def _engine_plan(req: V1RequestBase):
         if primary not in available:
             primary = None
     if primary is None:
+        # Chrome is always available: the engine is built at import, while the
+        # stealth one is optional, so it is the fallback for any other value.
         default = config.default_engine()
         primary = default if default in available else 'chrome'
-        if primary not in available:
-            primary = next(iter(available))
 
     order = [available[primary]]
     if config.engine_fallback():
         for name, eng in available.items():
             if name != primary:
                 order.append(eng)
-    return order, len(order) > 1
+    return order
 
 
 def _looks_challenged(result: SolveResult) -> bool:
@@ -468,7 +467,7 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
     """
     timeout = int(req.maxTimeout) / 1000
     deadline = time.monotonic() + timeout
-    order, _can_fallback = _engine_plan(req)
+    order = _engine_plan(req)
     host = _host_of(req)
 
     last_error = None

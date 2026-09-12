@@ -11,8 +11,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from playwright_captcha import CaptchaType
-
 import pipeline
 from detection import ACCESS_DENIED_TITLES, TURNSTILE_SELECTORS
 from engines import stealth_engine
@@ -138,10 +136,9 @@ def engine() -> StealthEngine:
     return StealthEngine.__new__(StealthEngine)
 
 
-async def wait_until_cleared(page, captcha_type=CaptchaType.CLOUDFLARE_TURNSTILE,
-                             budget=6.0) -> bool:
+async def wait_until_cleared(page, budget=6.0) -> bool:
     deadline = asyncio.get_running_loop().time() + budget
-    return await engine()._wait_until_cleared(None, page, captcha_type, deadline)
+    return await engine()._wait_until_cleared(page, deadline)
 
 
 # The confirm delay and the poll interval are the clock, and waiting them out
@@ -255,8 +252,7 @@ class ChallengeWait(unittest.IsolatedAsyncioTestCase):
         # what the page carried at the first look does not decide the whole wait.
         page = FakePage([CHALLENGED, INTERSTITIAL], container_box=CHECKBOX_ROW)
 
-        await wait_until_cleared(page, captcha_type=CaptchaType.CLOUDFLARE_INTERSTITIAL,
-                                 budget=0.3)
+        await wait_until_cleared(page, budget=0.3)
 
         self.assertNotEqual(page.mouse.clicks, [])
 

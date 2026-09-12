@@ -81,7 +81,7 @@ class EngineSelection(unittest.TestCase):
     def test_auto_still_means_let_the_service_choose(self):
         req = V1RequestBase({"url": "https://example-site.tld/", "engine": "auto"})
 
-        order, _ = flaresolverr_service._engine_plan(req)
+        order = flaresolverr_service._engine_plan(req)
 
         self.assertTrue(order)
 

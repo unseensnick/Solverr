@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from concurrent.futures import TimeoutError as FuturesTimeout
-from datetime import datetime, timedelta
+from datetime import timedelta
 from urllib.parse import urlsplit
 from typing import List, Optional, Tuple
 
@@ -186,20 +186,12 @@ class StealthContext:
 
     def __init__(self, proxy_config: Optional[dict]):
         self.proxy_config = proxy_config
-        self.created_at = datetime.now()
-        self.last_used = self.created_at
         self.lock = asyncio.Lock()
         self._ip = None
         self.browser = None
         self.context = None
         self.page = None
         self.user_agent = ""
-
-    def lifetime(self) -> timedelta:
-        return datetime.now() - self.created_at
-
-    def idle(self) -> timedelta:
-        return datetime.now() - self.last_used
 
     async def start(self):
         # Resolved here, not left to the library: handing it a concrete zone
@@ -526,7 +518,7 @@ class StealthEngine(Engine):
                 # clears itself, and a widget is clicked by coordinate, so neither
                 # needs the solver's init scripts. Only the paid escalation below
                 # does, and it moves to the throwaway page for them.
-                solved = await self._wait_until_cleared(None, page, captcha_type, deadline)
+                solved = await self._wait_until_cleared(page, deadline)
 
                 # Escalate to the paid CAPTCHA API only if configured and still
                 # stuck. The budget for it was kept back above.
@@ -686,14 +678,14 @@ class StealthEngine(Engine):
                             str(e).split("\nCall log:")[0].strip())
         return None
 
-    async def _wait_until_cleared(self, solver, page, captcha_type, deadline) -> bool:
+    async def _wait_until_cleared(self, page, deadline) -> bool:
         """Wait for the Cloudflare challenge to clear, up to ``deadline``.
 
         Non-interactive interstitials solve themselves after a few seconds of JS,
         so for those this just polls for the challenge to disappear. An interactive
         Turnstile needs a click, so its checkbox is clicked and re-clicked while it
-        stays unsolved. A ``solver`` is passed only by the paid escalation, which
-        nudges playwright-captcha instead.
+        stays unsolved. The paid escalation does not come through here: it runs
+        playwright-captcha on its own throwaway page.
         """
         loop = asyncio.get_running_loop()
         last_click = 0.0
@@ -708,17 +700,7 @@ class StealthEngine(Engine):
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
                     logging.debug("challenge still present (title=%r, url=%s)",
                                   await page.title(), page.url)
-                if solver is not None:
-                    try:
-                        await solver.solve_captcha(
-                            captcha_container=page,
-                            captcha_type=captcha_type,
-                            wait_checkbox_attempts=1,
-                            wait_checkbox_delay=0.5,
-                        )
-                    except Exception as e:
-                        logging.debug("click-solve nudge: %s", e)
-                elif has_widget:
+                if has_widget:
                     token = await self._turnstile_token(page)
                     # A standalone Turnstile widget stays in the DOM after solving,
                     # so _detect keeps seeing it and only the filled token says it
