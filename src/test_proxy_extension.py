@@ -20,7 +20,7 @@ class ProxyExtensionCleanupTest(unittest.TestCase):
 
     PROXY = {"url": "http://p:1", "username": "u", "password": "secret"}
 
-    def _launch(self, chrome):
+    def _launch(self, chrome, chrome_exe=lambda: "/bin/chromium"):
         """Drive get_webdriver with the machine-dependent boundaries stubbed out."""
         created = []
         real_create = utils.create_proxy_extension
@@ -31,7 +31,7 @@ class ProxyExtensionCleanupTest(unittest.TestCase):
             return path
 
         with patch.object(utils, 'create_proxy_extension', side_effect=_create), \
-                patch.object(utils, 'get_chrome_exe_path', return_value="/bin/chromium"), \
+                patch.object(utils, 'get_chrome_exe_path', side_effect=chrome_exe), \
                 patch.object(utils, 'get_chrome_major_version', return_value="151"), \
                 patch.object(utils, 'start_xvfb_display'), \
                 patch.object(geo, 'browser_language', return_value="en-US"), \
@@ -50,6 +50,13 @@ class ProxyExtensionCleanupTest(unittest.TestCase):
 
     def test_a_successful_launch_leaves_no_credentials_behind(self):
         path = self._launch(chrome=lambda **kwargs: _FakeDriver())
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_failure_before_the_launch_leaves_no_credentials_behind(self):
+        # Finding Chrome, reading its version and starting the display all run
+        # after the extension is written, and all three can raise.
+        path = self._launch(chrome=lambda **kwargs: _FakeDriver(),
+                            chrome_exe=RuntimeError("no Chrome on this host"))
         self.assertFalse(os.path.exists(path))
 
 
