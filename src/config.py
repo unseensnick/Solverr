@@ -194,12 +194,21 @@ def browser_wait_timeout() -> int:
 
 
 def session_ttl_minutes() -> int:
-    """Idle minutes before the reaper closes a session's browser (0 disables reaping)."""
+    """Idle minutes before the reaper closes a session's browser.
+
+    Zero or less disables idle reaping entirely (``SessionStore.reap_idle``
+    returns early), so abandoned browsers then live until the cap evicts them.
+    The reaper says which of the two it is at startup.
+    """
     return _int_env('SESSION_TTL_MINUTES', 30)
 
 
 def session_max() -> int:
-    """Max concurrent sessions per engine before the oldest-idle is evicted."""
+    """Max concurrent sessions per engine before the oldest-idle is evicted.
+
+    Zero or less disables the cap (``SessionStore.enforce_cap`` returns early)
+    rather than refusing every session, so the only bound left is the TTL.
+    """
     return _int_env('SESSION_MAX', 20)
 
 

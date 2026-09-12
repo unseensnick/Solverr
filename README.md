@@ -124,8 +124,10 @@ Each engine keeps its own session pool under one shared session-id namespace; a 
 
 Clients often create a session and never destroy it (a mobile app can be killed before it could). To stop abandoned browsers leaking memory, Solverr runs a **background reaper** that:
 
-- closes any session idle longer than `SESSION_TTL_MINUTES` (default 30). Every request bumps the session's last-used time, so an in-use session is never reaped.
-- evicts the oldest-idle session once an engine exceeds `SESSION_MAX` (default 20).
+- closes any session idle longer than `SESSION_TTL_MINUTES` (default 30). Idle time runs from the end of the last request on the session, so a long solve doesn't leave it looking idle the moment it finishes, and a session with a request on it is never reaped. Set it to `0` to switch idle reaping off.
+- evicts the oldest-idle session once an engine exceeds `SESSION_MAX` (default 20). Set it to `0` to switch the cap off.
+
+Whichever of the two you switch off, the reaper's startup line says so.
 
 So `sessions.destroy` is good practice but optional: cleanup happens automatically.
 
@@ -308,8 +310,8 @@ All settings are environment variables and all are optional.
 
 | Variable                  | Default | Description                                                              |
 | ------------------------- | ------- | ----------------------------------------------------------------------- |
-| `SESSION_TTL_MINUTES`     | `30`    | Idle minutes before the reaper closes a session's browser (`0` disables). |
-| `SESSION_MAX`             | `20`    | Max concurrent sessions per engine before oldest-idle eviction.          |
+| `SESSION_TTL_MINUTES`     | `30`    | Idle minutes before the reaper closes a session's browser (`0` or less disables idle reaping). |
+| `SESSION_MAX`             | `20`    | Max concurrent sessions per engine before oldest-idle eviction (`0` or less disables the cap). |
 | `REAPER_INTERVAL_SECONDS` | `60`    | How often the reaper scans.                                              |
 | `MAX_TIMEOUT_MS`          | `180000` | Ceiling on a request's `maxTimeout` (`0` lifts it). A larger request is clamped to this with a warning rather than refused, so existing callers keep working. |
 

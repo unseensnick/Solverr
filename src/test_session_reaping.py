@@ -1,4 +1,5 @@
-"""Browser-free tests for what the reaper is allowed to close.
+"""Browser-free tests for what the reaper is allowed to close, and what it says
+it will close at startup.
 
 A session being solved on is not idle, whatever its timestamp says: quitting the
 driver under a live request kills it with an "invalid session id" the caller can
@@ -12,6 +13,7 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+from session_reaper import SessionReaper
 from sessions import Session, SessionStore
 
 LONG_AGO = datetime.now() - timedelta(hours=2)
@@ -64,14 +66,66 @@ class EnforceCap(unittest.TestCase):
         self.assertNotIn("old", storage.enforce_cap(1))
 
 
+class _Clock:
+    """A stand-in for the wall clock the store reads, so a test can move it.
+
+    Releasing a session stamps it free at the current time, so a case about what
+    happens once the TTL has passed since the release has to be able to get
+    there without waiting.
+    """
+
+    def __init__(self):
+        self.value = datetime.now()
+
+    def now(self) -> datetime:
+        return self.value
+
+    def advance(self, delta: timedelta) -> None:
+        self.value += delta
+
+
+class IdleCountsFromWhenTheRequestEnded(unittest.TestCase):
+    """Idle time runs from the release, not from the claim.
+
+    last_used moved only when a session was claimed, so a solve that took longer
+    than the TTL left the session over-idle the instant it returned and the next
+    reaper pass closed a browser a request had just finished with.
+    """
+
+    def test_a_session_whose_long_request_just_ended_is_not_reaped(self):
+        target = session("s", LONG_AGO, in_use=1)
+        storage = storage_with(target)
+
+        storage.end_use(target)
+
+        self.assertEqual(storage.reap_idle(TTL), [])
+
+    def test_a_session_whose_long_request_just_ended_is_not_evicted_over_the_cap(self):
+        target = session("s", LONG_AGO, in_use=1)
+        storage = storage_with(target, session("other", datetime.now()))
+
+        storage.end_use(target)
+
+        self.assertNotIn("s", storage.enforce_cap(1))
+
+
 class UseCounting(unittest.TestCase):
     """Each case starts from the count its release has to change, so a mark that
-    is never released shows up as a session that is never reaped."""
+    is never released shows up as a session that is never reaped. The clock is
+    moved past the TTL after the releases, because a release also stamps the
+    session free."""
+
+    def setUp(self):
+        self.clock = _Clock()
+        patcher = patch("sessions.datetime", self.clock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_a_session_is_free_again_once_its_request_ends(self):
         target = session("s", LONG_AGO, in_use=1)
         storage = storage_with(target)
         storage.end_use(target)
+        self.clock.advance(TTL * 2)
 
         self.assertEqual(storage.reap_idle(TTL), ["s"])
 
@@ -79,6 +133,7 @@ class UseCounting(unittest.TestCase):
         target = session("s", LONG_AGO, in_use=2)
         storage = storage_with(target)
         storage.end_use(target)
+        self.clock.advance(TTL * 2)
 
         self.assertEqual(storage.reap_idle(TTL), [])
 
@@ -87,6 +142,7 @@ class UseCounting(unittest.TestCase):
         storage = storage_with(target)
         storage.end_use(target)
         storage.end_use(target)
+        self.clock.advance(TTL * 2)
 
         self.assertEqual(storage.reap_idle(TTL), ["s"])
 
@@ -324,6 +380,33 @@ class ReapRaceOnHandout(unittest.TestCase):
             with self.subTest(window=window):
                 store, session, _reaped = self.run_with_reaper_at(window)
                 self.assertIs(store.sessions.get("shared"), session)
+
+
+class ReaperSettingsLine(unittest.TestCase):
+    """The startup line a deployer reads to check what the reaper will do.
+
+    A TTL or a cap of zero or less switches its half off, and both used to print
+    as `0`, which reads as the most aggressive setting there is.
+    """
+
+    def line(self, ttl_minutes: int, max_sessions: int) -> str:
+        reaper = SessionReaper([], timedelta(minutes=ttl_minutes), max_sessions, 60)
+        with self.assertLogs(level="INFO") as logged:
+            reaper.start()
+        reaper.stop()
+        return logged.output[0]
+
+    def test_a_disabled_ttl_says_idle_reaping_is_off(self):
+        self.assertIn("idle reaping off (SESSION_TTL_MINUTES <= 0)", self.line(0, 20))
+
+    def test_a_disabled_cap_says_there_is_no_cap(self):
+        self.assertIn("no session cap (SESSION_MAX <= 0)", self.line(30, 0))
+
+    def test_a_configured_ttl_is_reported(self):
+        self.assertIn("ttl=0:30:00", self.line(30, 20))
+
+    def test_a_configured_cap_is_reported(self):
+        self.assertIn("max=20/engine", self.line(30, 20))
 
 
 if __name__ == "__main__":

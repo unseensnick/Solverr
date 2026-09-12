@@ -229,6 +229,12 @@ class SessionStore:
         """Release the mark ``get`` took, so the session can be reaped again."""
         with self._lock:
             session.in_use = max(0, session.in_use - 1)
+            # Idle time runs from when the session was last free, not from when
+            # its last request started. Stamping only on claim meant a solve
+            # that took three minutes left the session three minutes idle the
+            # moment it returned, so the next reaper pass could close a browser
+            # a request had just finished with.
+            session.last_used = datetime.now()
 
     def reap_idle(self, ttl: timedelta) -> List[str]:
         """Close and remove sessions idle longer than ``ttl``. Returns reaped ids."""
