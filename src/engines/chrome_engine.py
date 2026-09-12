@@ -61,12 +61,19 @@ class ChromeEngine(Engine):
         # the browser under this request. Released in the finally below, which
         # runs in this thread and so survives func_timeout stopping the worker.
         in_use = None
+        # The proxy this browser actually exits through. For a session that is
+        # the proxy it was built with, not the one on this request: the /v1
+        # contract ignores a request proxy when a session is named, so taking it
+        # from the request would pin the timezone to an exit the traffic never
+        # uses, and say a different country than the browser's own language.
+        browser_proxy = req.proxy
         try:
             if req.session:
                 session_id = req.session
                 ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
                 session, fresh = self._sessions.get(session_id, ttl, req.proxy)
                 in_use = session
+                browser_proxy = session.proxy
 
                 if fresh:
                     logging.debug(f"new session created to perform the request (session_id={session_id})")
@@ -78,7 +85,7 @@ class ChromeEngine(Engine):
             else:
                 driver = utils.get_webdriver(req.proxy)
                 logging.debug('New instance of webdriver has been created to perform the request')
-            _apply_timezone(driver, req.proxy)
+            _apply_timezone(driver, browser_proxy)
             return func_timeout(timeout, self._evil_logic, (req, driver, method, timeout))
         except FunctionTimedOut:
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')

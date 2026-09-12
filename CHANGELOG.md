@@ -7,6 +7,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 ### Fixes
 
 - **The log no longer records proxy passwords, cookie values or form field values; logs written by earlier versions may hold your `PROXY_PASSWORD`, so clear them or change it.** Every request was logged at the default level with the proxy password filled in from `PROXY_PASSWORD`, and debug logging added the solved cookies and the Turnstile token. The lines still show the command, the URL and every name, with the values replaced by `<redacted>`.
+- **A session keeps solving through the proxy it was created with, instead of silently falling back to the server's own address after it is rebuilt.** A session's browser is rebuilt whenever its lifetime runs out, the idle cleanup closes it, the session cap evicts it, or the other engine takes the request over. Each rebuild used whatever proxy the current request carried, and the API ignores that field once a session is named, so the proxy was usually nothing at all. The Chrome engine also reports the timezone of the session's own proxy now, rather than the one on the request.
 - **Form POST requests from Prowlarr work again, instead of failing with "Request parameter 'headers' must be a list".** 1.6.0 started checking the type of the deprecated `headers` field, which Solverr has never read and which clients send as an object; it is accepted in any shape again and still ignored.
 
 ## [1.6.0]

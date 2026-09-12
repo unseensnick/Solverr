@@ -1,5 +1,6 @@
 import logging
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
@@ -17,9 +18,13 @@ class Session:
     payload: Any
     created_at: datetime
     last_used: datetime = field(default=None)  # type: ignore[assignment]
-    # Requests currently solving on this driver. Guarded by SessionsStorage's
+    # Requests currently solving on this driver. Guarded by SessionStore's
     # lock, and read by the reaper so it never quits a browser mid-request.
     in_use: int = 0
+    # The proxy this session's browser actually exits through. Kept because the
+    # /v1 contract puts the proxy on sessions.create and ignores it on every
+    # later request, so the request that triggers a rebuild does not carry it.
+    proxy: Optional[dict] = None
 
     def __post_init__(self):
         if self.last_used is None:
@@ -30,6 +35,39 @@ class Session:
 
     def idle(self) -> timedelta:
         return datetime.now() - self.last_used
+
+
+# The proxy each session id was created with, shared by both engines' stores.
+# A session's egress belongs to the id, not to the request that happens to name
+# it next: clients set the proxy on sessions.create and omit it afterwards, and
+# the same id legitimately exists in both pools after an engine fallback. Kept
+# when a session is reaped, capped or expires, so the rebuild goes back out
+# through the same exit instead of the server's own address; dropped only when
+# the client destroys the session.
+_PROXY_BY_ID: "OrderedDict[str, Optional[dict]]" = OrderedDict()
+_PROXY_BY_ID_LOCK = threading.Lock()
+# Session ids come from the client, so this is bounded: a client that invents
+# ids and never destroys them evicts its own oldest entries rather than growing
+# the map without limit.
+_PROXY_MEMORY = 1024
+
+
+def _remember_proxy(session_id: str, proxy: Optional[dict]) -> None:
+    with _PROXY_BY_ID_LOCK:
+        _PROXY_BY_ID.pop(session_id, None)
+        _PROXY_BY_ID[session_id] = proxy
+        while len(_PROXY_BY_ID) > _PROXY_MEMORY:
+            _PROXY_BY_ID.popitem(last=False)
+
+
+def _recall_proxy(session_id: str) -> Optional[dict]:
+    with _PROXY_BY_ID_LOCK:
+        return _PROXY_BY_ID.get(session_id)
+
+
+def _forget_proxy(session_id: str) -> None:
+    with _PROXY_BY_ID_LOCK:
+        _PROXY_BY_ID.pop(session_id, None)
 
 
 class SessionStore:
@@ -83,7 +121,8 @@ class SessionStore:
                 return existing, False
 
         # Build outside the lock (launching a browser takes seconds).
-        session = Session(session_id, self._build(proxy), datetime.now())
+        session = Session(session_id, self._build(proxy), datetime.now(), proxy=proxy)
+        _remember_proxy(session_id, proxy)
 
         with self._lock:
             race = self.sessions.get(session_id)
@@ -116,6 +155,7 @@ class SessionStore:
         """
         with self._lock:
             session = self.sessions.pop(session_id, None)
+        _forget_proxy(session_id)
         if session is None:
             return False
         self._teardown(session)
@@ -130,11 +170,19 @@ class SessionStore:
         Marking happens here rather than in the caller so nothing can evict the
         session between handing it out and the request starting on it.
 
-        The proxy has to reach both create calls below. Without it a session that
-        outlives its TTL comes back on a direct connection, and one named by a
-        request before it exists is born that way, which is silent: the browser
-        still solves, just from the server's own address.
+        The proxy has to reach the create call below. Without it a session named
+        by a request before it exists is born on a direct connection, which is
+        silent: the browser still solves, just from the server's own address. A
+        session that already exists keeps the proxy it was created with, which is
+        what the rebuild below uses.
         """
+        # The session's own proxy wins over whatever this request carries: /v1
+        # ignores a request proxy when a session is named, so a request that
+        # rebuilds a reaped or expired session must not redirect its exit.
+        remembered = _recall_proxy(session_id)
+        if remembered is not None:
+            proxy = remembered
+
         # claim=True: the session comes back already marked, taken under the same
         # lock that found or stored it. Marking here instead left it findable and
         # idle for an instant, which the reaper or the cap can use to close its
@@ -161,7 +209,9 @@ class SessionStore:
         logging.debug("session's lifetime has expired, so the session is recreated (session_id=%s)",
                       session_id)
         self._teardown(session)
-        return self.create(session_id, proxy, claim=True)
+        # The session's own proxy, not the caller's: this is a rebuild of an
+        # existing session, and the request that triggered it carries no proxy.
+        return self.create(session_id, session.proxy, claim=True)
 
     def touch(self, session_id: str) -> None:
         with self._lock:
