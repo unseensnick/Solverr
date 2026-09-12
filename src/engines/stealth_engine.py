@@ -10,6 +10,8 @@ across requests.
 import asyncio
 import base64
 import logging
+import threading
+import time
 from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
@@ -225,6 +227,10 @@ class StealthEngine(Engine):
         self._runtime = get_runtime()
         self._sessions = SessionStore(build=self._start_context,
                                       teardown=self._close_context)
+        # How long the request on this thread may spend launching a browser.
+        # A session's browser is launched from inside SessionStore.get, which
+        # fixes the signature, so the share reaches _start_context this way.
+        self._launch_budget = threading.local()
 
     # ---- session registry (controller-facing) -------------------------------
     #
@@ -235,8 +241,10 @@ class StealthEngine(Engine):
 
     def _start_context(self, proxy: Optional[dict]) -> "StealthContext":
         ctx = StealthContext(geo.proxy_to_config(proxy))
+        allowed = min(getattr(self._launch_budget, "seconds", None) or config.stealth_start_timeout(),
+                      config.stealth_start_timeout())
         try:
-            self._runtime.run(ctx.start(), timeout=config.stealth_start_timeout())
+            self._runtime.run(ctx.start(), timeout=allowed)
         except Exception:
             # start() may already have launched the browser before failing.
             self._close_context(ctx)
@@ -272,33 +280,49 @@ class StealthEngine(Engine):
     # ---- solving ------------------------------------------------------------
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
+        # The share starts here, not once the browser is up. Launching Camoufox
+        # takes seconds, and they used to be spent outside the budget: a session
+        # launch was bounded only by STEALTH_START_TIMEOUT, and a per-request one
+        # could take a full share of its own before the solve clock started.
+        started = time.monotonic()
+        self._launch_budget.seconds = timeout
         own_ctx = False
         # get() hands the session over already marked in use, so the reaper and
         # the cap cannot close the browser under this request. Released in the
         # finally below, exactly as the Chrome engine does it.
         in_use = None
-        if req.session:
-            ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
-            session, _ = self._sessions.get(req.session, ttl, req.proxy)
-            in_use = session
-            ctx = session.payload
-        else:
-            ctx = StealthContext(geo.proxy_to_config(req.proxy))
-            # Owned before start(): a launch that fails or times out has usually
-            # already spawned the browser, and only the finally below closes it.
-            own_ctx = True
+        ctx = None
+        # Inside the try, exactly as the Chrome engine does it: a session whose
+        # browser fails to launch used to escape unwrapped, so the client got a
+        # bare message (an empty one on a launch timeout) instead of the
+        # "Error solving the challenge." the other engine reports.
         try:
+            if req.session:
+                ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
+                session, _ = self._sessions.get(req.session, ttl, req.proxy)
+                in_use = session
+                ctx = session.payload
+            else:
+                ctx = StealthContext(geo.proxy_to_config(req.proxy))
+                # Owned before start(): a launch that fails or times out has
+                # usually already spawned the browser, and only the finally
+                # below closes it.
+                own_ctx = True
             if own_ctx:
-                self._runtime.run(ctx.start(), timeout=min(timeout, config.stealth_start_timeout()))
-            return self._runtime.run(self._do_solve(req, ctx, method, timeout), timeout=timeout + 5)
+                self._runtime.run(ctx.start(),
+                                  timeout=min(budget.remaining_share(started, timeout),
+                                              config.stealth_start_timeout()))
+            left = budget.remaining_share(started, timeout)
+            return self._runtime.run(self._do_solve(req, ctx, method, left), timeout=left + 5)
         except FuturesTimeout:
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
+            self._launch_budget.seconds = None
             if in_use is not None:
                 self._sessions.end_use(in_use)
-            if own_ctx:
+            if own_ctx and ctx is not None:
                 try:
                     self._runtime.run(ctx.close(), timeout=60)
                 except Exception:
@@ -450,9 +474,18 @@ class StealthEngine(Engine):
                 # separate document that the interstitial only submits for once its
                 # markup is gone: waiting for domcontentloaded alone returns at once
                 # whenever the challenge page itself is still the current document.
+                # Bounded by the same deadline the solve was, not a fixed
+                # 5s per state: two of those on top of a solve that ran to its
+                # deadline overran the share and turned a late clear into a
+                # timeout error instead of the page it had just reached.
+                loop = asyncio.get_running_loop()
                 for state in ("domcontentloaded", "networkidle"):
+                    left_ms = int((deadline - loop.time()) * 1000)
+                    if left_ms <= 0:
+                        logging.debug("no budget left to let the %s state settle", state)
+                        break
                     try:
-                        await page.wait_for_load_state(state, timeout=_NETWORKIDLE_MS)
+                        await page.wait_for_load_state(state, timeout=min(_NETWORKIDLE_MS, left_ms))
                     except Exception:
                         logging.debug("post-solve %s wait timed out", state)
                 logging.info("Challenge solved!")

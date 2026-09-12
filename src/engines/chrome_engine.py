@@ -56,6 +56,9 @@ class ChromeEngine(Engine):
         self._sessions = sessions
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
+        # The share starts here, not once the browser is up: launching one takes
+        # seconds, and they used to be spent outside the budget entirely.
+        started = time.monotonic()
         driver = None
         # get() hands the session over already marked in use, so nothing can quit
         # the browser under this request. Released in the finally below, which
@@ -86,7 +89,8 @@ class ChromeEngine(Engine):
                 driver = utils.get_webdriver(req.proxy)
                 logging.debug('New instance of webdriver has been created to perform the request')
             _apply_timezone(driver, browser_proxy)
-            return func_timeout(timeout, self._evil_logic, (req, driver, method, timeout))
+            left = budget.remaining_share(started, timeout)
+            return func_timeout(left, self._evil_logic, (req, driver, method, left))
         except FunctionTimedOut:
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
         except Exception as e:

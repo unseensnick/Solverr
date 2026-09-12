@@ -56,6 +56,9 @@ class World:
     looks: list = field(default_factory=list)
     # One entry per navigation, so the cookie-reload rule is observable.
     navigations: list = field(default_factory=list)
+    # (state, timeout_ms) per post-solve settle wait, so a wait that ignores
+    # what is left of the share is observable.
+    settle_waits: list = field(default_factory=list)
     # What the engine actually handed its browser, so a refused cookie shows up.
     cookies_set: list = field(default_factory=list)
 
@@ -162,7 +165,7 @@ class _SeleniumDriver:
 class ChromeHarness:
     name = "chrome"
 
-    def solve(self, world: World, **fields):
+    def solve(self, world: World, timeout: float = 60.0, **fields):
         driver = _SeleniumDriver(world)
         req = V1RequestBase(dict({"url": world.url, "disableMedia": False}, **fields))
 
@@ -172,7 +175,7 @@ class ChromeHarness:
         import utils
         with patch('engines.chrome_engine.time.sleep', side_effect=_slept), \
                 patch.object(utils, 'get_user_agent', return_value=world.user_agent):
-            return ChromeEngine(sessions=None)._evil_logic(req, driver, "GET", 60.0)
+            return ChromeEngine(sessions=None)._evil_logic(req, driver, "GET", timeout)
 
 
 # ---- Stealth ---------------------------------------------------------------
@@ -233,8 +236,8 @@ class _PlaywrightPage:
         for handler in self._response_handlers:
             handler(_Response(self))
 
-    async def wait_for_load_state(self, *_a, **_k):
-        pass
+    async def wait_for_load_state(self, state=None, timeout=None):
+        self.world.settle_waits.append((state, timeout))
 
     async def screenshot(self):
         return self.world.screenshot
@@ -282,7 +285,7 @@ class _StealthCtx:
 class StealthHarness:
     name = "stealth"
 
-    def solve(self, world: World, **fields):
+    def solve(self, world: World, timeout: float = 60.0, **fields):
         ctx = _StealthCtx(world)
         req = V1RequestBase(dict({"url": world.url, "disableMedia": False}, **fields))
         # __new__ rather than __init__: the constructor starts the background
@@ -297,7 +300,7 @@ class StealthHarness:
 
         async def run():
             with patch('asyncio.sleep', _slept):
-                return await engine._navigate_and_solve(req, ctx, "GET", 60.0)
+                return await engine._navigate_and_solve(req, ctx, "GET", timeout)
 
         return asyncio.run(run())
 
