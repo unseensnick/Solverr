@@ -1,9 +1,15 @@
 """Chrome engine: Selenium + vendored undetected_chromedriver.
 
-This is FlareSolverr's original solving path, moved behind the Engine interface
-unchanged in behavior. It stays the default engine because it empirically clears
-the target sites best and already supports sessions, POST, cookie injection and
-screenshots.
+FlareSolverr's original solving path, behind the Engine interface. It stays the
+default engine because it empirically clears the hardest sites and already
+supports sessions, POST, cookie injection and screenshots.
+
+The clearing core below (`_evil_logic` and the Turnstile helpers) is still
+upstream's and still syncs from it. What wraps it is ours: the session handover
+and its lock, the browser identity, response headers, the shared spine calls,
+and the share of `maxTimeout` this engine gets. Those have diverged from
+upstream deliberately, and each divergence is recorded in
+docs/dev/upstream-sync.md.
 """
 import json
 import logging
