@@ -124,9 +124,40 @@ def browser_timezone() -> Optional[str]:
     'auto' and unset mean the same thing, deriving the zone from the egress IP
     so it agrees with the exit country. Pinning it to a zone costs no lookup, so
     an offline deployment sets this rather than an opt-out flag.
+
+    A zone the system's tzdata does not list is dropped with a warning and the
+    request falls back to 'auto', because an unchecked typo splits the engines:
+    Chrome's CDP override fails and `_apply_timezone` swallows it, leaving that
+    browser on the container's zone, while the stealth side hands the same
+    string to Camoufox.
     """
     raw = os.environ.get('BROWSER_TIMEZONE', '').strip()
-    return raw or None
+    if not raw or raw.lower() == 'auto':
+        return raw or None
+    return _known_zone(raw)
+
+
+# Warn once per bad value, like the language reader above: this is read on every
+# browser launch.
+_rejected_zones = set()
+
+
+def _known_zone(raw: str) -> Optional[str]:
+    """`raw` if the system's timezone table lists it, else None ('auto').
+
+    geo imports config, so the import stays inside the function. A host with no
+    tzdata has nothing to check against, and geo already warns about that on its
+    own, so the value is passed through unverified rather than dropped.
+    """
+    import geo
+    zones = geo._known_zones()
+    if not zones or raw in zones:
+        return raw
+    if raw not in _rejected_zones:
+        _rejected_zones.add(raw)
+        logging.warning("BROWSER_TIMEZONE=%r is not a timezone this system knows; "
+                        "following the exit IP instead", raw)
+    return None
 
 
 def response_headers() -> bool:

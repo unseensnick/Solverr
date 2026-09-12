@@ -400,7 +400,7 @@ Anything that isn't a language tag is ignored with a warning in the log rather t
 
 Whatever the language ends up being, both engines report it as the two-entry `navigator.languages` a desktop browser sends: `de-DE` becomes `["de-DE", "de"]`.
 
-**`BROWSER_TIMEZONE`** takes any IANA zone. Pinning it costs no timezone lookup, but the language still comes from the exit IP, so an air-gapped deployment sets `LANG` as well, or uses `BROWSER_GEO`, to skip the check entirely.
+**`BROWSER_TIMEZONE`** takes any IANA zone the container's own timezone data lists. Pinning it costs no timezone lookup, but the language still comes from the exit IP, so an air-gapped deployment sets `LANG` as well, or uses `BROWSER_GEO`, to skip the check entirely. A zone that isn't in that data (`Europe/Stockholmm`) is ignored with a warning naming it, and the timezone falls back to `auto`, because passing a typo on would put the two engines in different timezones.
 
 Two things worth knowing. Forcing a language a country doesn't speak, or a timezone it isn't in, is a mismatch a site can see, so change one only if you know why. And some countries share a timezone definition with a neighbour: Norway reports `Europe/Berlin` and the Netherlands `Europe/Brussels`, which is correct rather than a bug, since those are the same zone with the same offset and the same daylight-saving rules.
 
