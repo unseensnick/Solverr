@@ -95,6 +95,17 @@ class SessionProxy(unittest.TestCase):
 
         self.assertEqual(builder.proxies, [PROXY, PROXY])
 
+    def test_an_unknown_session_is_born_on_the_proxy_the_request_carries(self):
+        # The memory has never held this id, which is every request that names a
+        # session before anything created one. "Nothing remembered" has to stay
+        # distinct from "remembered as having no proxy", or the request's own
+        # proxy is dropped and the browser solves from the server's address.
+        builder = _Builder()
+
+        store_with(builder).get("never-seen", proxy=PROXY)
+
+        self.assertEqual(builder.proxies, [PROXY])
+
     def test_a_reaped_session_ignores_the_proxy_the_next_request_carries(self):
         builder = _Builder()
         store = store_with(builder)
@@ -106,11 +117,13 @@ class SessionProxy(unittest.TestCase):
 
         self.assertEqual(builder.proxies, [PROXY, PROXY])
 
-    def test_an_expired_session_rebuilds_on_its_own_proxy_once_the_memory_is_evicted(self):
+    def test_an_expired_session_rebuilds_on_the_proxy_the_session_holds(self):
+        # With the memory gone (the cap drops an old id), the session object is
+        # the only thing left that knows where this browser was exiting.
         builder = _Builder()
         store = store_with(builder)
         store.create("s", PROXY)
-        sessions._PROXY_BY_ID.clear()  # as the memory cap does to an old id
+        sessions._PROXY_BY_ID.clear()
 
         store.get("s", ttl=timedelta(0), proxy={"url": "http://someone-elses:1"})
 
