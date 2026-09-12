@@ -229,6 +229,8 @@ Example response (truncated):
 
 `solution.headers` is empty unless `RESPONSE_HEADERS=true`, which fills it on both engines or neither. FlareSolverr has never populated it, so the default keeps the payload identical to its.
 
+`solution.turnstile_token` is whatever token the page's own Turnstile widget holds when the page is read. The Camoufox engine waits for a widget to fill one, because it can press the checkbox itself; the Chrome engine reports one only if it is already there, unless the request sends `tabs_till_verify` and asks it to press.
+
 ### `request.post`
 
 Like `request.get`, plus `postData`.
