@@ -18,6 +18,7 @@ from unittest.mock import patch
 from selenium.common import NoSuchElementException, StaleElementReferenceException
 from selenium.webdriver.common.by import By
 
+from detection import TURNSTILE_SELECTORS
 from dtos import V1RequestBase
 from engines.chrome_engine import ChromeEngine
 from engines.stealth_engine import StealthEngine
@@ -64,6 +65,9 @@ class World:
     foreign_cookies: list = field(default_factory=list)
     response_headers: dict = field(default_factory=lambda: {"content-type": "text/html"})
     selectors: frozenset = frozenset()
+    # The value in the page's Turnstile input, if it has one. A widget the site
+    # solved by itself carries one without anybody pressing anything.
+    turnstile_token: str = ""
     challenged_for: int = 0
     # Title reads so far, shared by both fakes so "challenged_for" means the
     # same number of looks on either engine.
@@ -91,6 +95,17 @@ class World:
     def has(self, selector: str) -> bool:
         return selector in self.selectors and len(self.looks) <= self.challenged_for
 
+    def carries_token(self, selector: str) -> bool:
+        """Whether `selector` names a Turnstile input this page still has.
+
+        `has` models challenge markup going away once the page clears. A site's
+        own Turnstile input does not go away: it stays, holding its token, which
+        is what both engines read after the solve. Only the token selectors are
+        exempt from the countdown; everything else disappears with the challenge.
+        """
+        names_token = any(sel in selector for sel in TURNSTILE_SELECTORS)
+        return names_token and bool(self.selectors & set(TURNSTILE_SELECTORS))
+
 
 # ---- Chrome ----------------------------------------------------------------
 
@@ -109,6 +124,16 @@ class _HtmlElement:
 
     def is_enabled(self):
         raise StaleElementReferenceException("the challenge navigated away")
+
+
+class _InputElement:
+    """An element whose value a read can ask for, like a token input."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def get_attribute(self, name):
+        return self._value if name == "value" else None
 
 
 class _SeleniumDriver:
@@ -150,6 +175,8 @@ class _SeleniumDriver:
         # and signals absence by raising rather than returning nothing.
         if by == By.TAG_NAME and value == "html":
             return _HtmlElement()
+        if by == By.CSS_SELECTOR and self._world.carries_token(value):
+            return _InputElement(self._world.turnstile_token)
         if by == By.CSS_SELECTOR and self._world.has(value):
             return object()
         raise NoSuchElementException(value)
@@ -274,6 +301,9 @@ class _PlaywrightPage:
     async def query_selector(self, selector):
         return object() if self.world.has(selector) else None
 
+    def locator(self, selector):
+        return _PlaywrightLocator(self.world, selector)
+
     async def goto(self, *_a, **_k):
         self.world.navigations.append(1)
         for handler in self._response_handlers:
@@ -315,6 +345,24 @@ class _PlaywrightPage:
     def remove_listener(self, _event, handler):
         if handler in self._response_handlers:
             self._response_handlers.remove(handler)
+
+
+class _PlaywrightLocator:
+    """The slice of Playwright's locator a token read touches."""
+
+    def __init__(self, world, selector):
+        self._world = world
+        self._selector = selector
+
+    async def count(self):
+        return 1 if self._world.carries_token(self._selector) else 0
+
+    @property
+    def first(self):
+        return self
+
+    async def input_value(self, timeout=None):
+        return self._world.turnstile_token
 
 
 class _Route:

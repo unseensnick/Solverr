@@ -196,6 +196,13 @@ class ChromeEngine(Engine):
         if method != "POST" and req.tabs_till_verify is not None:
             deadline = budget.solve_deadline(started, timeout)
             turnstile_token = _resolve_turnstile_captcha(driver, req.tabs_till_verify, deadline)
+        elif method != "POST":
+            # No count, so there is no way to press the checkbox, but a widget
+            # the page solved by itself still carries a token and the stealth
+            # engine reports it. Read-only, and without the grace period a late
+            # widget gets above: that wait is only worth paying when there is a
+            # count to press with.
+            turnstile_token = _turnstile_token_value(driver)
 
         # wait for the page
         if utils.get_config_log_html():

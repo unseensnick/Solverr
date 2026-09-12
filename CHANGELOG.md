@@ -39,6 +39,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **The Chrome browser's interface language is set from one tag again.** It was taking the `Accept-Language` header's `"de-DE, de"` pair as its `--lang` value, which no ordinary browser sends.
 - **Per-host engine memory is now capped at 500 hosts, so a deployment that reaches many different sites cannot grow it for the life of the process.** Past the cap the host asked for longest ago is forgotten, which costs it one routing decision.
 - **A `tabs_till_verify` count sent to the Camoufox engine is now reported in the log as not needed, instead of being dropped without a word.** That engine reaches the checkbox by coordinate, so the count has nothing to do; each engine now declares whether it needs one.
+- **`solution.turnstile_token` now means the same thing on both engines: the token the page's widget carries.** The Chrome engine reported one only when the request also asked it to press the checkbox with `tabs_till_verify`, so the same page answered by the two engines disagreed about whether there was a token at all.
 - **Form POST requests from Prowlarr work again, instead of failing with "Request parameter 'headers' must be a list".** 1.6.0 started checking the type of the deprecated `headers` field, which Solverr has never read and which clients send as an object; it is accepted in any shape again and still ignored.
 
 ## [1.6.0]

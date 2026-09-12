@@ -114,6 +114,17 @@ class EngineConformanceTest(unittest.TestCase):
                 early = [c for c in result.cookies if c["name"] == "early"][0]
                 self.assertEqual(early["expiry"], 1893456000)
 
+    def test_both_engines_report_a_token_the_page_already_carries(self):
+        # A widget the site solved by itself, with no count to press it: the
+        # token means the same thing whichever engine answered.
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                # One world per engine: a world records how often it was looked
+                # at, and the second engine would start where the first stopped.
+                world = World(selectors=frozenset(TURNSTILE_SELECTORS), challenged_for=1,
+                              turnstile_token="0.ALREADY-SOLVED")
+                self.assertEqual(harness.solve(world).turnstile_token, "0.ALREADY-SOLVED")
+
     def test_a_returned_cookie_never_carries_the_playwright_key(self):
         for name, result, _ in self.each():
             with self.subTest(engine=name):
