@@ -31,6 +31,10 @@ INTERSTITIAL = ("Just a moment...", frozenset({"#challenge-form", TOKEN_INPUT}))
 
 CHECKBOX_ROW = {"x": 100.0, "y": 200.0, "width": 300.0, "height": 65.0}
 FULL_PAGE = {"x": 0.0, "y": 0.0, "width": 1280.0, "height": 800.0}
+# An inline wrapper the page collapsed around the hidden input: too narrow, and
+# too short, to be the checkbox row a click has to land on.
+NARROW_BOX = {"x": 100.0, "y": 200.0, "width": 24.0, "height": 65.0}
+FLAT_BOX = {"x": 100.0, "y": 200.0, "width": 300.0, "height": 4.0}
 IFRAME_RECT = {"x": 400.0, "y": 500.0, "width": 300.0, "height": 65.0}
 
 
@@ -162,6 +166,16 @@ class WidgetMeasurement(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_page_sized_container_is_not_taken_for_a_widget(self):
         page = FakePage([INTERSTITIAL], container_box=FULL_PAGE)
+
+        self.assertIsNone(await engine()._widget_box(page))
+
+    async def test_a_container_narrower_than_a_checkbox_row_is_not_a_widget(self):
+        page = FakePage([INTERSTITIAL], container_box=NARROW_BOX)
+
+        self.assertIsNone(await engine()._widget_box(page))
+
+    async def test_a_container_flatter_than_a_checkbox_row_is_not_a_widget(self):
+        page = FakePage([INTERSTITIAL], container_box=FLAT_BOX)
 
         self.assertIsNone(await engine()._widget_box(page))
 

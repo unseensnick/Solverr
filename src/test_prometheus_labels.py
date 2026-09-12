@@ -52,11 +52,12 @@ class DomainLabelTest(unittest.TestCase):
     def test_a_missing_url_is_unknown(self):
         self.assertEqual(parse_domain_url(None), "unknown")
 
-    def test_the_other_sentinel_does_not_itself_consume_the_cap(self):
+    def test_every_hostname_past_the_cap_becomes_other(self):
+        # The second one, not just the first: the sentinel takes no slot of its
+        # own, so the cap keeps applying however many hosts arrive past it.
         self.fill_to_cap()
         parse_domain_url("https://fourth.tld/a")
-        parse_domain_url("https://fifth.tld/a")
-        self.assertEqual(parse_domain_url("https://three.tld/z"), "three.tld")
+        self.assertEqual(parse_domain_url("https://fifth.tld/a"), "other")
 
     def test_reset_clears_the_seen_set(self):
         self.fill_to_cap()

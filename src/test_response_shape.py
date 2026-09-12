@@ -48,8 +48,12 @@ def _solver_response(response: str, content_type: str = None) -> V1ResponseBase:
 
 class HtmlResponseShapeTest(unittest.TestCase):
 
-    def test_html_solve_omits_content_type(self):
-        self.assertNotIn('contentType', _serialized(SolveResult(response="<html/>")))
+    def test_an_html_solve_emits_only_the_fields_it_has_a_value_for(self):
+        # The whole key set, not one absent key: an optional field emitted as
+        # null is the shape FlareSolverr's clients do not expect, and checking
+        # them one at a time leaves the next one free to appear.
+        self.assertEqual(set(_serialized(SolveResult(response="<html/>"))),
+                         {'url', 'status', 'cookies', 'userAgent', 'turnstile_token', 'response'})
 
 
 class PdfResponseShapeTest(unittest.TestCase):

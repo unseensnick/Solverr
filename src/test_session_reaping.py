@@ -65,20 +65,30 @@ class EnforceCap(unittest.TestCase):
 
 
 class UseCounting(unittest.TestCase):
+    """Each case starts from the count its release has to change, so a mark that
+    is never released shows up as a session that is never reaped."""
 
     def test_a_session_is_free_again_once_its_request_ends(self):
-        target = session("s", LONG_AGO)
+        target = session("s", LONG_AGO, in_use=1)
         storage = storage_with(target)
         storage.end_use(target)
 
         self.assertEqual(storage.reap_idle(TTL), ["s"])
 
-    def test_concurrent_requests_each_hold_the_session(self):
+    def test_one_of_two_requests_ending_does_not_free_the_session(self):
         target = session("s", LONG_AGO, in_use=2)
         storage = storage_with(target)
         storage.end_use(target)
 
         self.assertEqual(storage.reap_idle(TTL), [])
+
+    def test_a_session_two_requests_held_is_free_once_both_end(self):
+        target = session("s", LONG_AGO, in_use=2)
+        storage = storage_with(target)
+        storage.end_use(target)
+        storage.end_use(target)
+
+        self.assertEqual(storage.reap_idle(TTL), ["s"])
 
 
 class HandingOutASession(unittest.TestCase):
@@ -108,10 +118,6 @@ class HandingOutASession(unittest.TestCase):
             storage.get("s", ttl=TTL)
 
         self.assertFalse(target.payload.quit.called)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ExpiryRace(unittest.TestCase):
@@ -206,6 +212,11 @@ class _WindowLock:
         return self._releases
 
 
+# A release index no release can carry, so the visitor never runs and the lock
+# only counts. Releases are numbered from one.
+NO_WINDOW = 0
+
+
 class ExpiryRaceUnderConcurrency(unittest.TestCase):
     """No window in the expiry path hands out a session that is about to close.
 
@@ -214,12 +225,25 @@ class ExpiryRaceUnderConcurrency(unittest.TestCase):
     failing mid-solve with an "invalid session id" it could do nothing about.
     """
 
-    def run_with_visitor_at(self, release_index):
-        """Replace an expired session while a second request arrives at one window."""
+    # Every lock release the expiry path makes: create's existing-session check,
+    # get's expiry decision, and the two the rebuild's create makes around
+    # launching the replacement browser outside the lock. The first case below
+    # pins the count, so a new window cannot appear unwalked.
+    WINDOWS = (1, 2, 3, 4)
+
+    def expired_store(self):
         store = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda d: d.quit())
         store.create("shared")
         store.sessions["shared"].created_at = datetime.now() - timedelta(hours=2)
+        return store
 
+    def run_with_visitor_at(self, release_index):
+        """Replace an expired session while a second request arrives at one window.
+
+        Returns the sessions that arriving request was handed, so a window that
+        does not exist reports an empty list rather than a silent pass.
+        """
+        store = self.expired_store()
         taken = []
 
         def visitor():
@@ -230,11 +254,19 @@ class ExpiryRaceUnderConcurrency(unittest.TestCase):
         store.get("shared", ttl=timedelta(minutes=1))
         return taken
 
+    def test_the_expiry_path_opens_the_windows_these_cases_walk(self):
+        store = self.expired_store()
+        store._lock = _WindowLock(NO_WINDOW, lambda: None)
+
+        store.get("shared", ttl=timedelta(minutes=1))
+
+        self.assertEqual(store._lock.releases, len(self.WINDOWS))
+
     def test_no_window_hands_out_a_browser_that_is_then_quit(self):
-        for release_index in range(1, 8):
-            with self.subTest(window=release_index):
-                for session in self.run_with_visitor_at(release_index):
-                    session.payload.quit.assert_not_called()
+        for window in self.WINDOWS:
+            with self.subTest(window=window):
+                taken = self.run_with_visitor_at(window)
+                self.assertEqual([s.payload.quit.called for s in taken], [False])
 
 
 class ReapRaceOnHandout(unittest.TestCase):
@@ -245,6 +277,10 @@ class ReapRaceOnHandout(unittest.TestCase):
     open, and a request could be given a browser that was already closing.
     """
 
+    # The handout path's two lock releases: create's existing-session check and
+    # get's expiry decision. Pinned by the first case below.
+    WINDOWS = (1, 2)
+
     def store_with_an_idle_session(self):
         store = SessionStore(build=lambda proxy=None: MagicMock(),
                              teardown=lambda payload: payload.quit())
@@ -254,22 +290,41 @@ class ReapRaceOnHandout(unittest.TestCase):
         return store
 
     def run_with_reaper_at(self, release_index):
+        """Hand out an idle session while the reaper runs at one window.
+
+        Returns the pool, the session handed out, and what each reaper pass took,
+        so a window that does not exist reports no pass at all.
+        """
         store = self.store_with_an_idle_session()
+        reaped = []
 
         def visitor():
-            store.reap_idle(timedelta(minutes=1))
+            reaped.append(store.reap_idle(timedelta(minutes=1)))
 
         store._lock = _WindowLock(release_index, visitor)
-        return store, store.get("shared")
+        session, _fresh = store.get("shared")
+        return store, session, reaped
 
-    def test_no_window_hands_out_a_reaped_browser(self):
-        for release_index in range(1, 8):
-            with self.subTest(window=release_index):
-                _store, (session, _fresh) = self.run_with_reaper_at(release_index)
-                session.payload.quit.assert_not_called()
+    def test_the_handout_path_opens_the_windows_these_cases_walk(self):
+        store = self.store_with_an_idle_session()
+        store._lock = _WindowLock(NO_WINDOW, lambda: None)
 
-    def test_the_session_handed_out_is_the_one_in_the_pool(self):
-        for release_index in range(1, 8):
-            with self.subTest(window=release_index):
-                store, (session, _fresh) = self.run_with_reaper_at(release_index)
+        store.get("shared")
+
+        self.assertEqual(store._lock.releases, len(self.WINDOWS))
+
+    def test_no_window_lets_the_reaper_take_the_session_being_handed_out(self):
+        for window in self.WINDOWS:
+            with self.subTest(window=window):
+                _store, _session, reaped = self.run_with_reaper_at(window)
+                self.assertEqual(reaped, [[]])
+
+    def test_the_session_handed_out_is_the_one_left_in_the_pool(self):
+        for window in self.WINDOWS:
+            with self.subTest(window=window):
+                store, session, _reaped = self.run_with_reaper_at(window)
                 self.assertIs(store.sessions.get("shared"), session)
+
+
+if __name__ == "__main__":
+    unittest.main()
