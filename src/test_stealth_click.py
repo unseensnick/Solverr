@@ -94,13 +94,16 @@ class FakePage:
 
     url = "https://example.tld/"
 
-    def __init__(self, rounds, *, token="", container_box=None, frames=()):
+    def __init__(self, rounds, *, token="", container_box=None, frames=(),
+                 selector_raises_once=False):
         self._rounds = list(rounds)
         self._title, self._present = self._rounds[0]
         self.token = token
         self.container_box = container_box
         self.frames = list(frames)
         self.mouse = FakeMouse()
+        # What a live page does when it navigates under a read in flight.
+        self._selector_raises_once = selector_raises_once
 
     async def title(self):
         if len(self._rounds) > 1:
@@ -109,6 +112,9 @@ class FakePage:
         return self._title
 
     async def query_selector(self, selector):
+        if self._selector_raises_once:
+            self._selector_raises_once = False
+            raise Exception("Execution context was destroyed, most likely because of a navigation")
         return object() if selector in self._present else None
 
     def locator(self, selector):
@@ -198,6 +204,17 @@ class TokenRead(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await engine()._turnstile_token(page))
 
 
+class InterstitialRead(unittest.IsolatedAsyncioTestCase):
+    """Asked exactly when the token fills, which is when the page navigates."""
+
+    async def test_a_read_that_races_the_clearing_navigation_is_not_fatal(self):
+        # The filled token is what makes an interstitial submit and leave, so
+        # this read is the most likely one to find the document gone.
+        page = FakePage([WIDGET], selector_raises_once=True)
+
+        self.assertFalse(await engine()._is_interstitial(page))
+
+
 class ChallengeWait(unittest.IsolatedAsyncioTestCase):
 
     @fast_clock
@@ -226,6 +243,17 @@ class ChallengeWait(unittest.IsolatedAsyncioTestCase):
         await wait_until_cleared(page, budget=0.2)
 
         self.assertEqual(page.mouse.clicks, [])
+
+    @fast_clock
+    async def test_a_checkbox_that_appears_later_is_still_clicked(self):
+        # Cloudflare injects the widget after the interstitial's first render, so
+        # what the page carried at the first look does not decide the whole wait.
+        page = FakePage([CHALLENGED, INTERSTITIAL], container_box=CHECKBOX_ROW)
+
+        await wait_until_cleared(page, captcha_type=CaptchaType.CLOUDFLARE_INTERSTITIAL,
+                                 budget=0.3)
+
+        self.assertNotEqual(page.mouse.clicks, [])
 
     @fast_clock
     async def test_an_answered_standalone_widget_is_solved(self):

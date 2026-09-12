@@ -645,10 +645,12 @@ class StealthEngine(Engine):
         nudges playwright-captcha instead.
         """
         loop = asyncio.get_running_loop()
-        is_turnstile = captcha_type == CaptchaType.CLOUDFLARE_TURNSTILE
         last_click = 0.0
         while True:
-            kind = (await self._detect_settled(page))[0]
+            # Both readings, every pass. A checkbox Cloudflare injects after the
+            # first look used to go unclicked for the whole wait, because whether
+            # there was one to click was decided once, before this loop began.
+            kind, has_widget = await self._detect_settled(page)
             if kind == "denied":
                 raise Exception('Cloudflare has blocked this request. '
                                 'Probably your IP is banned for this site, check in your web browser.')
@@ -666,7 +668,7 @@ class StealthEngine(Engine):
                         )
                     except Exception as e:
                         logging.debug("click-solve nudge: %s", e)
-                elif is_turnstile:
+                elif has_widget:
                     token = await self._turnstile_token(page)
                     # A standalone Turnstile widget stays in the DOM after solving,
                     # so _detect keeps seeing it and only the filled token says it
@@ -705,11 +707,17 @@ class StealthEngine(Engine):
         the token input but nothing else. Uses the narrow INTERSTITIAL_SELECTORS
         rather than the full challenge list, which carries markers an embedded
         widget shares and shapes an ordinary page can match by accident.
+
+        Read past a navigation, because this is asked exactly when the token has
+        just filled, which is the moment an interstitial submits it and leaves.
         """
-        for sel in INTERSTITIAL_SELECTORS:
-            if await page.query_selector(sel):
-                return True
-        return False
+        async def read():
+            for sel in INTERSTITIAL_SELECTORS:
+                if await page.query_selector(sel):
+                    return True
+            return False
+
+        return await self._past_navigation(read)
 
     async def _click_turnstile(self, page) -> bool:
         """Click the Turnstile checkbox, without touching main-world JS.
@@ -832,20 +840,24 @@ class StealthEngine(Engine):
             await solver.solve_captcha(captcha_container=page, captcha_type=captcha_type)
 
     async def _detect_settled(self, page) -> Tuple[str, bool]:
-        """``_detect``, retried once when the page moves under it.
+        """``_detect``, retried once when the page moves under it."""
+        return await self._past_navigation(lambda: self._detect(page))
+
+    async def _past_navigation(self, read):
+        """Run a page read, looking again once if the page moved under it.
 
         A challenge navigates to the real page the moment it clears, and any
-        title/selector read in flight then dies with "Execution context was
+        title or selector read in flight then dies with "Execution context was
         destroyed". That is the challenge succeeding, not the request failing, so
         look again once the new document is in place before giving up.
         """
         for attempt in (0, 1):
             try:
-                return await self._detect(page)
+                return await read()
             except Exception as e:
                 if attempt:
                     raise
-                logging.debug("detection raced a navigation, retrying: %s", e)
+                logging.debug("a page read raced a navigation, retrying: %s", e)
                 await asyncio.sleep(0.5)
 
     async def _detect(self, page) -> Tuple[str, bool]:
