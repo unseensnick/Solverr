@@ -228,3 +228,30 @@ class PostSolveSettle(unittest.TestCase):
 
         # 4s minus the 3s response margin leaves 1s for both states together.
         self.assertLessEqual(max(t for _s, t in world.settle_waits), 1000)
+
+
+class PaidEscalationBudget(unittest.TestCase):
+    """A configured paid solver gets time to work, taken out of the solve."""
+
+    def deadline_given(self, escalation_configured):
+        from engine_fakes import StealthHarness, World
+        from engines.stealth_engine import StealthEngine
+        seen = []
+
+        async def fake_wait(_self, _solver, _page, _captcha_type, deadline):
+            seen.append(deadline)
+            return True
+
+        with patch.object(stealth_engine.config, "api_solver_enabled",
+                          lambda: escalation_configured), \
+                patch.object(stealth_engine.budget, "solve_deadline", lambda *_a: 1000.0), \
+                patch.object(StealthEngine, "_wait_until_cleared", fake_wait):
+            StealthHarness().solve(World(title=CHALLENGE_TITLE, challenged_for=1))
+        return seen[0]
+
+    def test_no_solver_configured_leaves_the_whole_solve_deadline(self):
+        self.assertEqual(self.deadline_given(False), 1000.0)
+
+    def test_a_configured_solver_is_kept_its_own_room(self):
+        self.assertEqual(self.deadline_given(True),
+                         1000.0 - stealth_engine._API_SOLVE_SECONDS)

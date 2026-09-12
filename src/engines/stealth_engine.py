@@ -73,6 +73,12 @@ _WIDGET_READ_SECONDS = 5
 # of it restarts the verification, so a landed press earns a cooldown while a
 # press that found nothing to hit may retry on the next pass.
 _CLICK_COOLDOWN_SECONDS = 4
+
+# What the paid CAPTCHA escalation is allowed, kept back from the solve deadline
+# when one is configured. It is a round trip to the provider and back, and a
+# 2captcha Turnstile answer takes tens of seconds; without the reservation it
+# began with only the response margin left and never finished.
+_API_SOLVE_SECONDS = 30
 _POLL_SECONDS = 1.5
 
 # Cloudflare drops the challenge markup while it issues the next round, so a
@@ -462,8 +468,7 @@ class StealthEngine(Engine):
                 kind, is_turnstile = await self._detect_settled(page)
 
             if kind == "denied":
-                raise Exception('Cloudflare has blocked this request. '
-                                'Probably your IP is banned for this site, check in your web browser.')
+                raise Exception(pipeline.BLOCKED_MESSAGE)
 
             if kind == "challenge":
                 captcha_type = (CaptchaType.CLOUDFLARE_TURNSTILE if is_turnstile
@@ -476,13 +481,21 @@ class StealthEngine(Engine):
                 # verdict (which the controller can retry on the other engine) into
                 # a timeout error.
                 deadline = budget.solve_deadline(started, timeout)
+                if config.api_solver_enabled():
+                    # Leave the escalation room to work. It is a network round
+                    # trip to the provider and back, so starting it after the
+                    # solve deadline left it whatever the response margin was,
+                    # and configuring a paid solver turned "still challenged"
+                    # (which the other engine can retry) into a timeout.
+                    deadline -= _API_SOLVE_SECONDS
                 # Both kinds are handled on the context's own page: an interstitial
                 # clears itself, and a widget is clicked by coordinate, so neither
                 # needs the solver's init scripts. Only the paid escalation below
                 # does, and it moves to the throwaway page for them.
                 solved = await self._wait_until_cleared(None, page, captcha_type, deadline)
 
-                # Escalate to the paid CAPTCHA API only if configured and still stuck.
+                # Escalate to the paid CAPTCHA API only if configured and still
+                # stuck. The budget for it was kept back above.
                 if not solved and config.api_solver_enabled():
                     logging.info("Escalating to paid CAPTCHA API solver (%s)...",
                                  config.captcha_provider())
@@ -554,6 +567,9 @@ class StealthEngine(Engine):
                 if not config.response_headers() or main_response is None:
                     return {}
                 try:
+                    # Playwright's headers are already lower-cased and joined on
+                    # ", " for repeats, which is the shape Chrome's CDP map has,
+                    # so both engines hand back the same keys for one page.
                     return dict(main_response.headers)
                 except Exception:
                     logging.debug("could not read the response headers", exc_info=True)
@@ -652,8 +668,7 @@ class StealthEngine(Engine):
             # there was one to click was decided once, before this loop began.
             kind, has_widget = await self._detect_settled(page)
             if kind == "denied":
-                raise Exception('Cloudflare has blocked this request. '
-                                'Probably your IP is banned for this site, check in your web browser.')
+                raise Exception(pipeline.BLOCKED_MESSAGE)
             if kind == "challenge":
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
                     logging.debug("challenge still present (title=%r, url=%s)",

@@ -16,6 +16,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+import pipeline
 from detection import (ACCESS_DENIED_SELECTORS, ACCESS_DENIED_TITLES,
                        CHALLENGE_SELECTORS, CHALLENGE_TITLES, TURNSTILE_SELECTORS)
 from engine_fakes import HARNESSES, World
@@ -288,6 +289,13 @@ class DetectionConformanceTest(unittest.TestCase):
             with self.subTest(engine=name):
                 self.assertIn("Cloudflare has blocked this request", message)
 
+    def test_both_engines_refuse_in_the_same_words(self):
+        # Clients match on this text, so the two engines cannot each keep their
+        # own copy of it: it is pipeline.BLOCKED_MESSAGE for both.
+        for name, message in self.verdicts(title=ACCESS_DENIED_TITLES[0], challenged_for=9):
+            with self.subTest(engine=name):
+                self.assertIn(pipeline.BLOCKED_MESSAGE, message)
+
     def test_a_denied_selector_is_refused(self):
         for name, message in self.verdicts(
                 selectors=frozenset({ACCESS_DENIED_SELECTORS[0]}), challenged_for=9):
@@ -323,3 +331,4 @@ class DetectionConformanceTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

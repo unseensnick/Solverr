@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 from playwright_captcha import CaptchaType
 
-from detection import TURNSTILE_SELECTORS
+import pipeline
+from detection import ACCESS_DENIED_TITLES, TURNSTILE_SELECTORS
 from engines.stealth_engine import StealthEngine
 
 TOKEN_INPUT = TURNSTILE_SELECTORS[0]
@@ -21,6 +22,8 @@ TOKEN_INPUT = TURNSTILE_SELECTORS[0]
 # at the top of every detection pass, so one round is consumed per pass.
 CHALLENGED = ("Just a moment...", frozenset({"#challenge-form"}))
 CLEARED = ("Example Domain", frozenset())
+# The page Cloudflare serves when the address itself is refused.
+DENIED = (ACCESS_DENIED_TITLES[0], frozenset())
 # A site's own widget: the token input with none of Cloudflare's page markup.
 WIDGET = ("Sign in", frozenset({TOKEN_INPUT}))
 # The same, on a site that happens to name its container the way Cloudflare's
@@ -254,6 +257,15 @@ class ChallengeWait(unittest.IsolatedAsyncioTestCase):
                                  budget=0.3)
 
         self.assertNotEqual(page.mouse.clicks, [])
+
+    @fast_clock
+    async def test_a_page_that_turns_denied_mid_wait_is_refused_in_the_shared_words(self):
+        page = FakePage([CHALLENGED, DENIED])
+
+        with self.assertRaises(Exception) as caught:
+            await wait_until_cleared(page, budget=0.3)
+
+        self.assertEqual(str(caught.exception), pipeline.BLOCKED_MESSAGE)
 
     @fast_clock
     async def test_an_answered_standalone_widget_is_solved(self):
