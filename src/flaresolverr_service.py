@@ -189,7 +189,23 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
 def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
     logging.debug("Creating new session...")
 
-    engine = _validate_engine(req.engine) or config.default_engine().lower()
+    forced = _validate_engine(req.engine)
+    # 'auto' is not an engine, it is the absence of one, so it takes the default
+    # rather than falling through to Chrome.
+    engine = forced if forced in ('chrome', 'stealth') else config.default_engine().lower()
+
+    if req.session:
+        # Idempotent across both pools, not just the one this call would use: a
+        # fallback can leave the id live in the other one, and creating it again
+        # here opened a second browser under the same id and reported it as new.
+        for name in _available_engines():
+            if _pool_has(name, req.session):
+                return V1ResponseBase({
+                    "status": STATUS_OK,
+                    "message": "Session already exists.",
+                    "session": req.session
+                })
+
     if engine == 'stealth':
         if STEALTH_ENGINE is None:
             raise Exception("Stealth engine is not available (STEALTH_ENGINE disabled or dependencies missing).")
@@ -314,19 +330,27 @@ def _validate_max_timeout(req: V1RequestBase) -> None:
     a number is refused, and it says so instead of raising ValueError from inside
     the budget arithmetic.
     """
-    if req.maxTimeout is None:
-        req.maxTimeout = 60000
-        return
-    if isinstance(req.maxTimeout, bool):
+    asked = req.maxTimeout is not None
+    if not asked:
+        value = 60000
+    elif isinstance(req.maxTimeout, bool):
         raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
-    try:
-        value = int(req.maxTimeout)
-    except (TypeError, ValueError):
-        raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
-    if value < 1:
-        req.maxTimeout = 60000
-        return
+    else:
+        try:
+            value = int(req.maxTimeout)
+        except (TypeError, ValueError):
+            raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
+        if value < 1:
+            asked = False
+            value = 60000
     ceiling = config.max_timeout_ms()
+    if not asked:
+        # The default is a budget too, so a lowered ceiling has to bound it. The
+        # caller asked for nothing, so there is nothing to warn about.
+        if 0 < ceiling < value:
+            value = ceiling
+        req.maxTimeout = value
+        return
     if 0 < ceiling < value:
         logging.warning("Request parameter 'maxTimeout' of %dms is above the %dms ceiling and was "
                         "clamped. Raise MAX_TIMEOUT_MS if a longer budget is intended.", value, ceiling)
@@ -388,11 +412,17 @@ def _engine_plan(req: V1RequestBase):
     # sending the request elsewhere would silently open a second one under the
     # same id (and solve without the cookies the client warmed up).
     primary = None
-    if req.session:
-        for name in available:
-            if _pool_has(name, req.session):
-                primary = name
-                break
+    holders = [name for name in available if req.session and _pool_has(name, req.session)]
+    if len(holders) == 1:
+        primary = holders[0]
+    elif holders:
+        # A fallback leaves the same id live in both pools, and then "the engine
+        # holding it" names both. Per-host memory decides between them, as it
+        # would for a request with no session at all; without this the order the
+        # pools happen to be listed in did, so the host that only one engine can
+        # clear went back to the other one on every later request.
+        recalled = _recalled_engine(host)
+        primary = recalled if recalled in holders else holders[0]
     if primary is None:
         primary = _recalled_engine(host)
         if primary not in available:
@@ -466,12 +496,22 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
                             engine.name, e, order[i + 1].name)
             continue
 
-        if not is_last and _looks_challenged(result):
+        challenged = _looks_challenged(result)
+        if not is_last and challenged:
             last_error = Exception(f"Engine '{engine.name}' returned an unsolved challenge page")
             last_result = result
             logging.info("Engine '%s' returned an unsolved challenge page; falling back to '%s'...",
                          engine.name, order[i + 1].name)
             continue
+
+        if challenged:
+            # The last engine, with nothing left to fall back to. The page goes
+            # back to the caller, but it is not a clearance, so the memory must
+            # not learn this engine for the host: doing so sent every later
+            # request to the engine that failed.
+            logging.info("Engine '%s' returned a page that still looks challenged; returning it",
+                         engine.name)
+            return _to_challenge_resolution(result)
 
         _remember_engine(host, engine.name)
         logging.info("Solved %s with engine '%s'", host or req.url, engine.name)

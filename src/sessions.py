@@ -25,6 +25,12 @@ class Session:
     # /v1 contract puts the proxy on sessions.create and ignores it on every
     # later request, so the request that triggers a rebuild does not carry it.
     proxy: Optional[dict] = None
+    # Held for the whole solve, so two requests naming one session take its
+    # browser in turn. A browser has one page: driving it from two threads at
+    # once navigates under the other request and can answer it with the wrong
+    # page. The stealth engine had this on its context from the start; the
+    # Chrome pool did not, and it is one rule, so it lives on the session.
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self):
         if self.last_used is None:

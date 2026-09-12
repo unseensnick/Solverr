@@ -291,6 +291,8 @@ class StealthEngine(Engine):
         # the cap cannot close the browser under this request. Released in the
         # finally below, exactly as the Chrome engine does it.
         in_use = None
+        # The session lock this request holds, released in the finally below.
+        locked = None
         ctx = None
         # Inside the try, exactly as the Chrome engine does it: a session whose
         # browser fails to launch used to escape unwrapped, so the client got a
@@ -301,6 +303,13 @@ class StealthEngine(Engine):
                 ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
                 session, _ = self._sessions.get(req.session, ttl, req.proxy)
                 in_use = session
+                # One request at a time on this browser, the same rule the
+                # Chrome engine follows, taken before the context's own lock so
+                # the wait happens on the request thread and counts against the
+                # share rather than queueing up on the event loop.
+                if not session.lock.acquire(timeout=budget.remaining_share(started, timeout)):
+                    raise Exception("Timed out waiting for session '%s' to be free." % req.session)
+                locked = session.lock
                 ctx = session.payload
             else:
                 ctx = StealthContext(geo.proxy_to_config(req.proxy))
@@ -320,6 +329,8 @@ class StealthEngine(Engine):
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
             self._launch_budget.seconds = None
+            if locked is not None:
+                locked.release()
             if in_use is not None:
                 self._sessions.end_use(in_use)
             if own_ctx and ctx is not None:

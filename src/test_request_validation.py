@@ -167,6 +167,20 @@ class MaxTimeoutTest(unittest.TestCase):
         with self.assertRaises(Exception):
             _validate_max_timeout(self.request(True))
 
+    def test_the_default_budget_respects_a_lower_ceiling(self):
+        # A deployer who lowers the ceiling below the default means it for every
+        # request, including the ones that ask for nothing.
+        os.environ['MAX_TIMEOUT_MS'] = '30000'
+        req = self.request(None)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 30000)
+
+    def test_an_unusable_budget_falls_back_within_the_ceiling(self):
+        os.environ['MAX_TIMEOUT_MS'] = '30000'
+        req = self.request(0)
+        _validate_max_timeout(req)
+        self.assertEqual(req.maxTimeout, 30000)
+
     def test_a_zero_ceiling_lifts_the_clamp(self):
         os.environ['MAX_TIMEOUT_MS'] = '0'
         req = self.request(86400000)

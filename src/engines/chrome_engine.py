@@ -64,6 +64,8 @@ class ChromeEngine(Engine):
         # the browser under this request. Released in the finally below, which
         # runs in this thread and so survives func_timeout stopping the worker.
         in_use = None
+        # The session lock this request holds, released in the finally below.
+        locked = None
         # The proxy this browser actually exits through. For a session that is
         # the proxy it was built with, not the one on this request: the /v1
         # contract ignores a request proxy when a session is named, so taking it
@@ -77,6 +79,12 @@ class ChromeEngine(Engine):
                 session, fresh = self._sessions.get(session_id, ttl, req.proxy)
                 in_use = session
                 browser_proxy = session.proxy
+                # One request at a time on this browser. Waiting counts against
+                # the share, like the launch does, so a queue cannot push the
+                # request past the budget the caller asked for.
+                if not session.lock.acquire(timeout=budget.remaining_share(started, timeout)):
+                    raise Exception("Timed out waiting for session '%s' to be free." % session_id)
+                locked = session.lock
 
                 if fresh:
                     logging.debug(f"new session created to perform the request (session_id={session_id})")
@@ -96,6 +104,8 @@ class ChromeEngine(Engine):
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
+            if locked is not None:
+                locked.release()
             if in_use is not None:
                 self._sessions.end_use(in_use)
             if not req.session and driver is not None:
