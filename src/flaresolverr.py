@@ -15,6 +15,11 @@ import flaresolverr_service
 import utils
 
 
+# The background reaper, once the server has started it. Kept so its stop() can
+# be reached.
+SESSION_REAPER = None
+
+
 class JSONErrorBottle(Bottle):
     """
     Handle 404 errors
@@ -148,12 +153,15 @@ if __name__ == "__main__":
     reaper_managers = [flaresolverr_service.SESSIONS_STORAGE]
     if flaresolverr_service.STEALTH_ENGINE is not None:
         reaper_managers.append(flaresolverr_service.STEALTH_ENGINE)
-    SessionReaper(
+    # Kept, rather than started and forgotten: its stop() is the only way to
+    # bring the thread down, and nothing could reach it.
+    SESSION_REAPER = SessionReaper(
         reaper_managers,
         timedelta(minutes=config.session_ttl_minutes()),
         config.session_max(),
         config.reaper_interval_seconds(),
-    ).start()
+    )
+    SESSION_REAPER.start()
 
     # start the optional passthrough proxy (dormant unless PASSTHROUGH_ENABLED)
     import passthrough

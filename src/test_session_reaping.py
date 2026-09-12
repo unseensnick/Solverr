@@ -20,7 +20,7 @@ LONG_AGO = datetime.now() - timedelta(hours=2)
 TTL = timedelta(minutes=30)
 
 
-def storage_with(*sessions: Session) -> SessionsStorage:
+def storage_with(*sessions: Session) -> SessionStore:
     storage = SessionStore(build=lambda proxy=None: MagicMock(), teardown=lambda d: d.quit())
     for session in sessions:
         storage.sessions[session.session_id] = session
@@ -161,8 +161,7 @@ class HandingOutASession(unittest.TestCase):
         target = session("s", LONG_AGO)
         storage = storage_with(target)
 
-        with patch("utils.get_webdriver", lambda proxy=None: MagicMock()):
-            storage.get("s", ttl=TTL)
+        storage.get("s", ttl=TTL)
 
         self.assertTrue(target.payload.quit.called)
 
@@ -170,8 +169,7 @@ class HandingOutASession(unittest.TestCase):
         target = session("s", LONG_AGO, in_use=1)
         storage = storage_with(target)
 
-        with patch("utils.get_webdriver", lambda proxy=None: MagicMock()):
-            storage.get("s", ttl=TTL)
+        storage.get("s", ttl=TTL)
 
         self.assertFalse(target.payload.quit.called)
 

@@ -33,13 +33,7 @@ def stealth_max_attempts() -> int:
     """Click attempts per click-solver nudge (default 1). The engine runs its own
     wait-and-retry loop bounded by the request's maxTimeout, so one attempt per
     nudge keeps each pass fast. Set STEALTH_MAX_ATTEMPTS to override."""
-    raw = os.environ.get('STEALTH_MAX_ATTEMPTS', '').strip()
-    if not raw:
-        return 1
-    try:
-        return int(raw)
-    except ValueError:
-        return 1
+    return _int_env('STEALTH_MAX_ATTEMPTS', 1)
 
 
 def stealth_start_timeout() -> float:
