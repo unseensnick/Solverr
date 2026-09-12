@@ -235,11 +235,11 @@ Like `request.get`, plus `postData`.
 
 Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges, so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
 
-The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches.
+The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches. Each allowed host gets its own warm session, so once a host has been cleared its next request reuses that browser and its cookies instead of starting one.
 
 A passthrough request can't pin an engine, so it uses `DEFAULT_ENGINE` like any other request. That matters for PDFs: they come back as the real file only when the stealth engine solved them (see the PDF note under [`request.get`](#requestget)), so set `DEFAULT_ENGINE=stealth` if the site serves them.
 
-**The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS` (anything else gets a `403`, so it is never a blind open proxy). A request to:
+**The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS`. Nothing outside that list is ever fetched, so it is never a blind open proxy. A request to:
 
 ```
 http://<solverr-host>:8888/example-site.tld/some/path/1/
@@ -247,7 +247,7 @@ http://<solverr-host>:8888/example-site.tld/some/path/1/
 
 is solved as `https://example-site.tld/some/path/1/`. Replace `<solverr-host>` with wherever Solverr actually runs: its Docker **service/container name** (e.g. `solverr`) if the client is on the same Docker network, otherwise Solverr's **host IP or hostname**. `8888` is `PASSTHROUGH_PORT`.
 
-A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites.
+A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…` or `/download.php?id=1`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites. A mirror you forget to list is therefore served by the default one rather than refused: nothing distinguishes it from one of those root-relative links.
 
 Searches can run against any mirror the client picks, but those root-relative follow-ups always land on the default one, so list the mirror you want them served by first. If that mirror goes down, move a healthy one to the front: a client pointed at a working mirror would otherwise still search fine and fail every download.
 
@@ -343,7 +343,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
 | `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
 | `PASSTHROUGH_CACHE_MAX_BYTES` | `268435456` | Ceiling on the total bytes the cache holds (`0` lifts it). Past the ceiling the soonest-to-expire entries are evicted first. A single body over a quarter of the ceiling is served but not cached. |
-| `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. |
+| `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. `0` or less falls back to 60000, the same budget the API gives a request that asks for none. |
 
 ### Browser, logging & server
 
@@ -359,7 +359,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `LOG_LEVEL`          | `info`    | `info` or `debug`.                                                             |
 | `LOG_FILE`           | none      | Also write logs to this file. Eg `/config/solverr.log`.                        |
 | `LOG_HTML`           | `false`   | Debug only: log all page HTML at `debug` level.                                |
-| `HOST` / `PORT`      | `0.0.0.0` / `8191` | Listening interface and port. Rarely changed under Docker.           |
+| `HOST` / `PORT`      | `0.0.0.0` / `8191` | Listening interface and port. `HOST` applies to the passthrough port too. Rarely changed under Docker. |
 | `TZ`                 | `UTC`     | Container timezone: log timestamps, and the browser's timezone when nothing resolves one. Eg `TZ=Europe/London`. |
 | `PROMETHEUS_ENABLED` | `false`   | Enable the Prometheus exporter (see below).                                    |
 | `PROMETHEUS_PORT`    | `8192`    | Exporter port (expose it if enabled).                                          |

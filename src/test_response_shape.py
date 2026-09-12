@@ -65,20 +65,20 @@ class PassthroughBodyTest(unittest.TestCase):
         encoded = base64.b64encode(PDF_BYTES).decode("ascii")
         with patch.object(flaresolverr_service, 'controller_v1_endpoint',
                           return_value=_solver_response(encoded, "application/pdf")):
-            _status, body, _content_type, _solution = passthrough._solve("https://example.tld/doc")
+            _status, body, _content_type, _solution = passthrough._solve("https://example.tld/doc", "example.tld")
         self.assertEqual(body, PDF_BYTES)
 
     def test_pdf_solution_is_served_under_its_content_type(self):
         encoded = base64.b64encode(PDF_BYTES).decode("ascii")
         with patch.object(flaresolverr_service, 'controller_v1_endpoint',
                           return_value=_solver_response(encoded, "application/pdf")):
-            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/doc")
+            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/doc", "example.tld")
         self.assertEqual(content_type, "application/pdf")
 
     def test_html_solution_stays_html(self):
         with patch.object(flaresolverr_service, 'controller_v1_endpoint',
                           return_value=_solver_response("<html/>")):
-            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/page")
+            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/page", "example.tld")
         self.assertEqual(content_type, passthrough._HTML_CONTENT_TYPE)
 
 

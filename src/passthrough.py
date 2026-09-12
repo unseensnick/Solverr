@@ -10,7 +10,8 @@ site-internal absolute link (e.g. /details/...) and routed to the default mirror
 (the first allow-listed host), so a client following the site's own links still
 comes back through the proxy. Requests are solved in-process through the same
 controller as /v1, reusing engine selection, fallback, sessions, and per-host
-memory.
+memory: each upstream host gets one warm session, so a cleared host is fetched
+with the cookies it was cleared with instead of launching a browser per request.
 
 The passthrough approach was demonstrated by the byparr-proxy project
 (https://github.com/guyg2232/byparr-proxy); this is an independent
@@ -18,6 +19,7 @@ reimplementation wired directly into the controller.
 """
 import base64
 import logging
+import os
 import re
 import threading
 import time
@@ -30,11 +32,26 @@ import flaresolverr_service
 from dtos import STATUS_OK, V1RequestBase
 
 # Static assets a client never needs from us; forwarding each would waste a full
-# solve cycle. Answered with 404 without touching the solver.
+# solve cycle. Answered with 404 without touching the solver. Matched against the
+# path alone, never the query.
 _SKIP_EXT = re.compile(
-    r"\.(css|js|mjs|map|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|mp4|webm)(\?|$)",
+    r"\.(css|js|mjs|map|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|mp4|webm)$",
     re.IGNORECASE,
 )
+
+# One warm session per upstream host, so a host that has been cleared is fetched
+# with the cookies that cleared it. Per host rather than one shared id because
+# the controller pins a request to the engine already holding its session, which
+# with a single id would override the per-host engine memory. The host always
+# comes from PASSTHROUGH_ALLOWED_HOSTS (see _handle), so a crafted path cannot
+# invent session ids.
+_SESSION_PREFIX = "passthrough:"
+
+# What a non-positive PASSTHROUGH_TIMEOUT_MS falls back to: the same value the
+# /v1 boundary substitutes for a maxTimeout below 1 (_validate_max_timeout). The
+# solve would get 60 seconds either way, so the two have to agree or a coalesced
+# waiter gives up before the solve it is waiting on can finish.
+_V1_DEFAULT_TIMEOUT_MS = 60000
 
 # Populated once by start() from config, so each request avoids re-reading env.
 _ALLOWED_HOSTS = set()
@@ -90,16 +107,25 @@ def _split_host(raw_path: str):
 
 def _apply_env_proxy(req: V1RequestBase) -> None:
     """Mirror the PROXY_URL injection the /v1 route does, so passthrough solves
-    use the same configured (e.g. residential) proxy. Engines read req.proxy."""
+    use the same configured (e.g. residential) proxy. Engines read req.proxy.
+
+    It reaches the browser through the session too: a named session is born with
+    the proxy the request that created it carried, and remembers it across every
+    rebuild afterwards (sessions.SessionStore)."""
     proxy = config.env_proxy()
     if proxy is not None:
         req.proxy = proxy
 
 
-def _solve(target: str):
+def _solve(target: str, host: str):
     """Solve `target` in-process via the controller. Returns (status, body_bytes,
     content_type, solution). Raises on solver failure."""
-    req = V1RequestBase({"cmd": "request.get", "url": target, "maxTimeout": _TIMEOUT_MS})
+    req = V1RequestBase({
+        "cmd": "request.get",
+        "url": target,
+        "maxTimeout": _TIMEOUT_MS,
+        "session": _SESSION_PREFIX + host,
+    })
     _apply_env_proxy(req)
     res = flaresolverr_service.controller_v1_endpoint(req)
     if getattr(res, '__error_500__', False) or res.status != STATUS_OK or res.solution is None:
@@ -187,7 +213,10 @@ class _Handler(BaseHTTPRequestHandler):
         rid = uuid.uuid4().hex[:6]
         raw = self.path
 
-        if _SKIP_EXT.search(raw):
+        # The query is not part of the asset test: a real page request whose
+        # query happens to end in ".js" (a callback or a redirect parameter) is
+        # still a page, and answering it 404 fails the client's search.
+        if _SKIP_EXT.search(raw.split("?", 1)[0].split("#", 1)[0]):
             logging.debug("[pt %s] %s %s -> 404 (static asset)", rid, self.command, raw)
             self._send(404)
             return
@@ -197,36 +226,49 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404)
             return
         if host not in _ALLOWED_HOSTS:
-            if "." in host:
-                # Looks like a hostname but isn't allow-listed: a mirror the
-                # deployer forgot to add to PASSTHROUGH_ALLOWED_HOSTS.
-                logging.warning("[pt %s] %s %s -> 403 (host '%s' not in PASSTHROUGH_ALLOWED_HOSTS)",
-                                rid, self.command, raw, host)
-                self._send(403, b"host not allowed")
-                return
-            # A site-internal absolute link (e.g. /details/...) that resolved
-            # against the origin and lost its mirror segment. Route it to the
-            # default mirror with the path intact so downloads and pagination work.
+            # A site-internal absolute link (e.g. /details/... or
+            # /download.php?id=1) that resolved against the origin and lost its
+            # mirror segment. Route it to the default mirror with the path intact
+            # so downloads and pagination work. A segment that looks like a
+            # hostname is not refused separately: nothing distinguishes a mirror
+            # the deployer forgot from a page named "download.php", and refusing
+            # the second breaks every download. The upstream host therefore always
+            # comes from the allow list, which is what keeps this from being a
+            # blind open proxy.
             if _DEFAULT_HOST is None:
+                logging.warning("[pt %s] %s %s -> 404 (PASSTHROUGH_ALLOWED_HOSTS is empty)",
+                                rid, self.command, raw)
                 self._send(404)
                 return
+            logging.debug("[pt %s] '%s' is not an allowed host; routing %s to the default mirror %s",
+                          rid, host, raw, _DEFAULT_HOST)
             host = _DEFAULT_HOST
             remainder = raw if raw.startswith("/") else "/" + raw
 
         target = "https://" + host + remainder
         now = time.monotonic()
 
+        # A hit is copied out under the lock and written after releasing it: the
+        # write goes to a client socket, so holding the lock across it lets one
+        # slow reader stall every other request's cache lookup and solve slot.
+        # The entry tuple and its bytes are immutable, so an eviction between the
+        # two cannot change what is sent.
+        hit = None
         with _lock:
             entry = _cache.get(raw)
             if entry and _CACHE_TTL > 0 and entry[0] > now:
-                logging.info("[pt %s] %s %s <- cache hit", rid, self.command, raw)
-                self._send(entry[1], entry[2], entry[3])
-                return
-            pending = _inflight.get(raw)
-            owner = pending is None
-            if owner:
-                pending = _Pending()
-                _inflight[raw] = pending
+                hit = entry
+            else:
+                pending = _inflight.get(raw)
+                owner = pending is None
+                if owner:
+                    pending = _Pending()
+                    _inflight[raw] = pending
+
+        if hit is not None:
+            logging.info("[pt %s] %s %s <- cache hit", rid, self.command, raw)
+            self._send(hit[1], hit[2], hit[3])
+            return
 
         if not owner:
             pending.event.wait(timeout=_TIMEOUT_MS / 1000 + 30)
@@ -247,7 +289,7 @@ class _Handler(BaseHTTPRequestHandler):
         # process, because the slot says a solve is still running.
         try:
             try:
-                status, body, content_type, solution = _solve(target)
+                status, body, content_type, solution = _solve(target, host)
             except Exception as e:
                 pending.error = e
                 logging.error("[pt %s] %s %s <- 502 after %.1fs: %s",
@@ -302,14 +344,15 @@ def start():
     _DEFAULT_HOST = hosts[0] if hosts else None
     _CACHE_TTL = config.passthrough_cache_ttl()
     _CACHE_MAX_BYTES = config.passthrough_cache_max_bytes()
-    _TIMEOUT_MS = config.passthrough_timeout_ms()
+    _TIMEOUT_MS = _effective_timeout_ms(config.passthrough_timeout_ms())
     port = config.passthrough_port()
+    host_bind = _listen_host()
 
-    logging.info("Passthrough proxy enabled on port %d", port)
+    logging.info("Passthrough proxy enabled on %s:%d", host_bind, port)
     if hosts:
         logging.info("  allowed hosts: %s (default: %s)", ", ".join(hosts), _DEFAULT_HOST)
     else:
-        logging.warning("  PASSTHROUGH_ALLOWED_HOSTS is empty; every request is refused (403)")
+        logging.warning("  PASSTHROUGH_ALLOWED_HOSTS is empty; every request is refused (404)")
     if _CACHE_MAX_BYTES <= 0:
         cap = "unbounded"
     elif _CACHE_MAX_BYTES >= 1024 * 1024:
@@ -320,5 +363,32 @@ def start():
         cap = f"{_CACHE_MAX_BYTES} bytes"
     logging.info("  cache ttl: %ds (max %s), request timeout: %dms", _CACHE_TTL, cap, _TIMEOUT_MS)
 
-    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
+    server = ThreadingHTTPServer((host_bind, port), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True, name="passthrough").start()
+
+
+def _listen_host() -> str:
+    """The interface to bind, read the way the /v1 server reads it.
+
+    Read here rather than through config.py because this has to be the same
+    setting flaresolverr.py reads, not a second one beside it: a deployer who
+    sets HOST to restrict the /v1 port expects it to cover this port too, and it
+    used to bind 0.0.0.0 regardless.
+    """
+    return os.environ.get('HOST', '0.0.0.0')
+
+
+def _effective_timeout_ms(configured: int) -> int:
+    """The per-request budget, with a non-positive value replaced by the /v1 default.
+
+    Passed straight through, a 0 or a negative value is substituted by the /v1
+    boundary anyway, so the solve ran on 60 seconds while this module sized the
+    coalescing wait off the original: a request waiting behind an in-flight solve
+    gave up (502) before that solve could answer, and a negative value made it
+    give up immediately.
+    """
+    if configured > 0:
+        return configured
+    logging.warning("PASSTHROUGH_TIMEOUT_MS=%d is not a usable budget; using %dms",
+                    configured, _V1_DEFAULT_TIMEOUT_MS)
+    return _V1_DEFAULT_TIMEOUT_MS
