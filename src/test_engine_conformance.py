@@ -125,6 +125,16 @@ class EngineConformanceTest(unittest.TestCase):
                               turnstile_token="0.ALREADY-SOLVED")
                 self.assertEqual(harness.solve(world).turnstile_token, "0.ALREADY-SOLVED")
 
+    def test_both_engines_report_that_token_on_a_post_too(self):
+        # The method decides whether a checkbox can be pressed, not whether a
+        # token that is already there can be read.
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                world = World(selectors=frozenset(TURNSTILE_SELECTORS), challenged_for=1,
+                              turnstile_token="0.ALREADY-SOLVED")
+                result = harness.solve(world, method="POST", postData="a=1")
+                self.assertEqual(result.turnstile_token, "0.ALREADY-SOLVED")
+
     def test_a_returned_cookie_never_carries_the_playwright_key(self):
         for name, result, _ in self.each():
             with self.subTest(engine=name):

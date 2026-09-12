@@ -20,8 +20,8 @@ shared) and nothing enforced parity above it.
   was written twice. `CLAUDE.md` already half-acknowledged this by telling reviewers to expect it
   ("the same mistake usually appears in both engines, since they were written against each other"),
   which is a reviewer instruction where a structural answer belongs.
-- **Divergence has nowhere to be declared.** `tabs_till_verify` is a silent no-op on the stealth
-  engine, documented only in the README. `solution.headers` was `{}` on both because filling it for
+- **Divergence had nowhere to be declared.** `tabs_till_verify` was a silent no-op on the stealth
+  engine, documented only in the README, until `Engine.presses_checkbox_unaided` gave it a slot. `solution.headers` was `{}` on both because filling it for
   one would create an asymmetry, so a capability both engines could answer stayed unbuilt until
   step 6 shipped it behind `RESPONSE_HEADERS`.
 - **The request boundary was untyped.** `V1RequestBase.__init__` was `self.__dict__.update(_dict)`,
@@ -53,7 +53,7 @@ result assembly.
 
 | Capability | Chrome | Stealth | Today | Target |
 |---|---|---|---|---|
-| `TAB_DRIVEN_TURNSTILE` | yes | no, clicks by coordinate | silent no-op on stealth | routed, or refused by name |
+| `TAB_DRIVEN_TURNSTILE` | yes | no, clicks by coordinate | **declared** as `presses_checkbox_unaided`: the count is used, or reported as unneeded | as today |
 | `RAW_DOCUMENT_BODY` | no | yes | README tells the client to pin stealth | routed automatically |
 | `RESPONSE_HEADERS` | CDP performance log | main-frame response | **shipped**, behind one setting |
 | `PAID_ESCALATION` | no | yes | dormant, undeclared | declared |
@@ -241,8 +241,10 @@ copy cannot drift from the law.
   mechanisms. Two Solverr-owned wrappers twinning each other are ordinary duplication, so they get
   judged by the code rules like any other duplicate.
 - **Divergent bits are typed capability slots, never nullable fields or per-engine forks.** The
-  standing counter-example is `tabs_till_verify`, which is a silent no-op rather than a declared
-  incapability.
+  counter-example used to be `tabs_till_verify`, a silent no-op rather than a declared incapability.
+  `Engine.presses_checkbox_unaided` is that declaration, and `pipeline.verdict`'s
+  `turnstile_is_a_challenge` is derived from it rather than hardcoded per engine, so the two cannot
+  drift apart.
 - **`RESPONSE_HEADERS` is in scope** (owner, 2026-08-25). The stealth half is close to free since the
   engine already tracks the main-frame response. The Chrome half reads the CDP performance log,
   which the vendored driver already supports through the `goog:loggingPrefs` capability; the

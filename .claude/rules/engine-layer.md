@@ -72,9 +72,12 @@ nothing.
   combination, never a per-engine branch inside shared code. A capability an engine cannot support
   is routed to one that can, or refused by name. One boolean the spine takes from each adapter is
   not a combination and is allowed while it is the only divergent bit on its surface
-  (`turnstile_is_a_challenge` on `pipeline.verdict`); a second one on the same surface turns both
-  into one typed capability. Never a silent no-op: `tabs_till_verify` quietly
-  doing nothing on the stealth engine is the defect this rule exists to stop.
+  (`turnstile_is_a_challenge` on `pipeline.verdict`, now read off
+  `Engine.presses_checkbox_unaided` rather than written out per engine); a second one on the same
+  surface turns both into one typed capability. Never a silent no-op: `tabs_till_verify` quietly
+  doing nothing on the stealth engine was the defect this rule exists to stop, and it is what
+  `presses_checkbox_unaided` closed: each engine declares whether it needs a tab count, and a
+  request that sends one to the engine that does not is told so.
 - **A shared component either derives a piece of state or does not own it.** Sharing the storage
   while each engine interprets it its own way is a fork wearing shared-code clothing, and nobody
   rules on it because it looks unified.

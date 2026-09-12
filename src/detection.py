@@ -37,6 +37,10 @@ CHALLENGE_SELECTORS = [
     'div.vc div.text-box h2'
 ]
 
+# Read as a list by the Chrome engine (joined into one CSS selector) and by
+# entry on the stealth engine, whose locator and its ancestor walk take a
+# single selector. A second entry here therefore needs the stealth reads
+# updated with it, or the two engines look at different things.
 TURNSTILE_SELECTORS = [
     "input[name='cf-turnstile-response']"
 ]

@@ -198,28 +198,43 @@ class LaunchInsideTheShare(unittest.TestCase):
         self.assertEqual(granted[:2], [22.0, 27.0])
 
 
+def _stealth_with(build):
+    from engines.stealth_engine import StealthEngine
+    engine = StealthEngine.__new__(StealthEngine)
+    engine._launch_budget = threading.local()
+    engine._runtime = MagicMock()
+    engine._sessions = SessionStore(build=build, teardown=lambda p: None)
+    return engine
+
+
+def _chrome_with(build):
+    from engines.chrome_engine import ChromeEngine
+    return ChromeEngine(sessions=SessionStore(build=build, teardown=lambda p: None))
+
+
 class LaunchFailureMessage(unittest.TestCase):
-    """Both engines report a browser that will not start the same way."""
+    """Both engines report a browser that will not start the same way.
+
+    The message is part of the contract: upstream's own suite matches on the
+    "Error solving the challenge." prefix, and a client cannot tell which engine
+    answered, so one engine reporting a bare exception is a fork.
+    """
+
+    ENGINES = (("chrome", _chrome_with), ("stealth", _stealth_with))
 
     def test_a_session_launch_failure_says_error_solving_the_challenge(self):
-        from engines.stealth_engine import StealthEngine
-        engine = StealthEngine.__new__(StealthEngine)
-        engine._launch_budget = threading.local()
-        engine._runtime = MagicMock()
-        engine._sessions = SessionStore(build=_wont_launch, teardown=lambda p: None)
+        for name, build_engine in self.ENGINES:
+            with self.subTest(engine=name):
+                engine = build_engine(_wont_launch)
 
-        with self.assertRaises(Exception) as caught:
-            engine.solve(V1RequestBase({"url": "https://example-site.tld/", "session": "s"}),
-                         "GET", 30.0)
+                with self.assertRaises(Exception) as caught:
+                    engine.solve(V1RequestBase({"url": "https://example-site.tld/",
+                                                "session": "s"}), "GET", 30.0)
 
-        self.assertIn("Error solving the challenge.", str(caught.exception))
+                self.assertIn("Error solving the challenge.", str(caught.exception))
 
     def test_a_session_launch_timeout_reports_the_timeout(self):
-        from engines.stealth_engine import StealthEngine
-        engine = StealthEngine.__new__(StealthEngine)
-        engine._launch_budget = threading.local()
-        engine._runtime = MagicMock()
-        engine._sessions = SessionStore(build=_launch_times_out, teardown=lambda p: None)
+        engine = _stealth_with(_launch_times_out)
 
         with self.assertRaises(Exception) as caught:
             engine.solve(V1RequestBase({"url": "https://example-site.tld/", "session": "s"}),

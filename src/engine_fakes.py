@@ -222,7 +222,7 @@ class _SeleniumDriver:
 class ChromeHarness:
     name = "chrome"
 
-    def solve(self, world: World, timeout: float = 60.0, **fields):
+    def solve(self, world: World, timeout: float = 60.0, method: str = "GET", **fields):
         driver = _SeleniumDriver(world)
         req = V1RequestBase(dict({"url": world.url, "disableMedia": False}, **fields))
 
@@ -235,7 +235,7 @@ class ChromeHarness:
         import utils
         with patch('engines.chrome_engine.time.sleep', side_effect=_slept), \
                 patch.object(utils, 'get_user_agent', return_value=world.user_agent):
-            return ChromeEngine(sessions=None)._evil_logic(req, driver, "GET", timeout)
+            return ChromeEngine(sessions=None)._evil_logic(req, driver, method, timeout)
 
 
 # ---- Stealth ---------------------------------------------------------------
@@ -414,7 +414,7 @@ class _StealthCtx:
 class StealthHarness:
     name = "stealth"
 
-    def solve(self, world: World, timeout: float = 60.0, **fields):
+    def solve(self, world: World, timeout: float = 60.0, method: str = "GET", **fields):
         ctx = _StealthCtx(world)
         req = V1RequestBase(dict({"url": world.url, "disableMedia": False}, **fields))
         # __new__ rather than __init__: the constructor starts the background
@@ -429,7 +429,7 @@ class StealthHarness:
 
         async def run():
             with patch('asyncio.sleep', _slept):
-                return await engine._navigate_and_solve(req, ctx, "GET", timeout)
+                return await engine._navigate_and_solve(req, ctx, method, timeout)
 
         return asyncio.run(run())
 
