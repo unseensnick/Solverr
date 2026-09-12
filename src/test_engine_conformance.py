@@ -248,6 +248,22 @@ class NavigationConformanceTest(unittest.TestCase):
                 harness.solve(world, cookies=[{"name": "a", "value": "1"}])
                 self.assertEqual(len(world.cookies_set), 1)
 
+    def test_a_cookie_with_a_path_and_no_domain_is_accepted_by_both(self):
+        # Playwright takes a url or a domain/path pair, never a url with a path,
+        # so anchoring this one to the request URL failed the whole request.
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                world = World()
+                harness.solve(world, cookies=[{"name": "a", "value": "1", "path": "/dl"}])
+                self.assertEqual(len(world.cookies_set), 1)
+
+    def test_a_cookie_with_no_path_applies_to_the_whole_site(self):
+        # Selenium's default. Anchoring to the request URL scoped it to that
+        # URL's directory instead, so a cookie set from /a/b was not sent to /c.
+        world = World()
+        HARNESSES[1].solve(world, cookies=[{"name": "a", "value": "1"}])
+        self.assertEqual(world.cookies_set[0].get("path"), "/")
+
     def test_an_empty_cookie_list_does_not_force_one(self):
         for name, count in self.navigations(cookies=[]):
             with self.subTest(engine=name):

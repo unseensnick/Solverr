@@ -105,17 +105,25 @@ class CookieShapeTest(unittest.TestCase):
     def test_client_cookie_drops_keys_playwright_rejects(self):
         self.assertNotIn('expiry', _to_playwright_cookies([SELENIUM_COOKIE], PAGE_URL)[0])
 
-    def test_a_cookie_with_no_domain_is_anchored_to_the_page(self):
+    def test_a_cookie_with_no_domain_takes_the_page_host(self):
         # Playwright refuses the whole batch without a url or domain/path pair,
         # so this shape (the one the README documents) used to fail the request.
-        # Selenium defaults it to the page being loaded; this matches that.
+        # Selenium defaults it to the host being loaded; this matches that.
         translated = _to_playwright_cookies([{"name": "a", "value": "1"}], PAGE_URL)[0]
-        self.assertEqual(translated['url'], PAGE_URL)
+        self.assertEqual(translated['domain'], 'example.tld')
 
-    def test_an_anchored_cookie_invents_no_domain(self):
-        # url and domain are alternatives; sending both is what Playwright rejects.
+    def test_a_cookie_with_no_path_applies_to_the_whole_host(self):
+        # A url would scope it to that URL's directory instead, so a cookie sent
+        # with a request for /a/b was not sent back for /c.
         translated = _to_playwright_cookies([{"name": "a", "value": "1"}], PAGE_URL)[0]
-        self.assertNotIn('domain', translated)
+        self.assertEqual(translated['path'], '/')
+
+    def test_a_cookie_with_a_path_and_no_domain_is_not_given_a_url(self):
+        # url and path are alternatives; sending both is what Playwright rejects,
+        # and it rejects the whole batch with it.
+        translated = _to_playwright_cookies([{"name": "a", "value": "1", "path": "/dl"}],
+                                            PAGE_URL)[0]
+        self.assertNotIn('url', translated)
 
     def test_a_domain_without_a_path_gets_the_default_one(self):
         translated = _to_playwright_cookies([{"name": "a", "value": "1",

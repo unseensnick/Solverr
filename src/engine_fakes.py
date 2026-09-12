@@ -160,7 +160,11 @@ class _SeleniumDriver:
                 "params": {"type": "Document",
                            "response": {"url": url, "headers": headers}}}})}
         return [entry("https://example-site.tld/challenge", {"cf-mitigated": "challenge"}),
-                entry(self._world.url, self._world.response_headers)]
+                entry(self._world.url, self._world.response_headers),
+                # An iframe is a Document too, and a cleared Cloudflare page
+                # leaves one behind, after the page's own response.
+                entry("https://challenges.cloudflare.com/turnstile",
+                      {"content-type": "text/html", "cf-ray": "iframe"})]
 
     def get_screenshot_as_png(self):
         # Raw bytes, like Selenium's own: the base64 encoding is the kernel's job
@@ -229,6 +233,10 @@ class _PlaywrightContext:
             # entry, which is what failed the request rather than the cookie.
             if not cookie.get("url") and not (cookie.get("domain") and cookie.get("path")):
                 raise ValueError("Cookie should have a url or a domain/path pair")
+            if cookie.get("url") and cookie.get("path"):
+                # Playwright's other half of the same rule: a url carries its
+                # own path, so passing both is refused, batch and all.
+                raise ValueError("Cookie should have either url or domain/path")
             self._page.world.cookies_set.append(cookie)
 
 
@@ -254,6 +262,11 @@ class _PlaywrightPage:
         self.world.navigations.append(1)
         for handler in self._response_handlers:
             handler(_Response(self))
+            # A subresource on the same page: another response, from a frame
+            # that is not the main one, so an engine that keeps the last
+            # response it saw reports this instead of the page.
+            handler(_Response(self, frame=object(), navigation=False,
+                              headers={"content-type": "text/html", "cf-ray": "iframe"}))
 
     async def wait_for_load_state(self, state=None, timeout=None):
         self.world.settle_waits.append((state, timeout))
@@ -306,20 +319,21 @@ class _RouteRequest:
 
 
 class _Request:
-    def __init__(self, page):
+    def __init__(self, page, navigation=True):
         self.headers = {"user-agent": page.world.user_agent}
+        self._navigation = navigation
 
     def is_navigation_request(self):
-        return True
+        return self._navigation
 
 
 class _Response:
-    """The main-frame navigation response both engines read headers off."""
+    """A response the page saw: the main-frame navigation, or a subresource."""
 
-    def __init__(self, page):
-        self.request = _Request(page)
-        self.frame = page.main_frame
-        self.headers = dict(page.world.response_headers)
+    def __init__(self, page, frame=None, navigation=True, headers=None):
+        self.request = _Request(page, navigation)
+        self.frame = page.main_frame if frame is None else frame
+        self.headers = dict(page.world.response_headers if headers is None else headers)
 
 
 class _StealthCtx:

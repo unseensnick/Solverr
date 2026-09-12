@@ -121,6 +121,12 @@ class ChromeEngine(Engine):
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
+            if driver is not None and req.session and config.response_headers():
+                # A session's browser keeps its network log between requests and
+                # only a read empties it. The read that reports the headers is
+                # skipped under returnOnlyCookies and never reached when a solve
+                # fails, so without this the log grows for the session's life.
+                _drain_performance_log(driver)
             if locked is not None:
                 locked.release()
             if in_use is not None:
@@ -255,7 +261,7 @@ class ChromeEngine(Engine):
             assembly.Read.URL: lambda: driver.current_url,
             assembly.Read.USER_AGENT: lambda: utils.get_user_agent(driver),
             assembly.Read.TOKEN: lambda: turnstile_token,
-            assembly.Read.HEADERS: lambda: _response_headers(driver),
+            assembly.Read.HEADERS: lambda: _response_headers(driver, driver.current_url),
             assembly.Read.WAIT: lambda: time.sleep(req.waitInSeconds),
             assembly.Read.BODY: lambda: (driver.page_source, None),
             assembly.Read.SCREENSHOT: lambda: driver.get_screenshot_as_png(),
@@ -263,26 +269,26 @@ class ChromeEngine(Engine):
         })
 
 
-def _response_headers(driver: WebDriver) -> dict:
-    """The final document's response headers, or {} when the feature is off.
+def _response_headers(driver: WebDriver, page_url: str) -> dict:
+    """The returned page's response headers, or {} when the feature is off.
 
     Selenium has no API for these, so the browser is asked at launch to log
-    network events (see get_webdriver) and the last main-document response is
-    picked out of that log here. Last rather than first: a challenge navigates
-    once it clears, so earlier entries describe pages the caller never asked for.
+    network events (see get_webdriver) and the document responses are picked out
+    of that log here. An iframe is a Document too, and a Cloudflare challenge
+    leaves one behind, so the entry has to be matched against the URL the caller
+    is getting back rather than taken as whichever came last. The stealth engine
+    reports its main-frame navigation response for the same reason.
 
-    The log is drained by reading it, which is what keeps a long-lived session
-    from accumulating one entry per request for as long as it lives.
+    Falls back to the last document entry when nothing matches, which is what a
+    redirect chain that ends on a URL the log never named looks like.
     """
     if not config.response_headers():
         return {}
-    try:
-        entries = driver.get_log('performance')
-    except Exception:
-        logging.debug("performance log unavailable, reporting no response headers", exc_info=True)
+    entries = _drain_performance_log(driver)
+    if entries is None:
         return {}
 
-    headers = {}
+    page, last = {}, {}
     for entry in entries:
         try:
             message = json.loads(entry['message'])['message']
@@ -291,10 +297,42 @@ def _response_headers(driver: WebDriver) -> dict:
             params = message.get('params') or {}
             if params.get('type') != 'Document':
                 continue
-            headers = (params.get('response') or {}).get('headers') or headers
+            response = params.get('response') or {}
+            headers = response.get('headers') or {}
+            if not headers:
+                continue
+            last = headers
+            if _same_document(response.get('url'), page_url):
+                page = headers
         except Exception:
             logging.debug("could not read a performance log entry", exc_info=True)
-    return headers
+    return page or last
+
+
+def _same_document(logged_url, page_url: str) -> bool:
+    """Whether a logged response URL is the document the caller is getting.
+
+    Compared without the fragment, which is never sent to the server and so
+    never appears on the response, but does appear on driver.current_url.
+    """
+    if not logged_url or not page_url:
+        return False
+    return logged_url.split('#', 1)[0] == page_url.split('#', 1)[0]
+
+
+def _drain_performance_log(driver: WebDriver):
+    """Read and so empty the browser's network log, or None when it has none.
+
+    Reading is what empties it, and a session's driver lives across requests, so
+    every request has to read it even when its headers are not going to be
+    reported: under returnOnlyCookies, or after a solve that failed, the entries
+    used to pile up in the browser for the life of the session.
+    """
+    try:
+        return driver.get_log('performance')
+    except Exception:
+        logging.debug("performance log unavailable, reporting no response headers", exc_info=True)
+        return None
 
 
 def _apply_timezone(driver: WebDriver, proxy: dict = None) -> None:

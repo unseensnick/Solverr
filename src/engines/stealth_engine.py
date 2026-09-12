@@ -14,6 +14,7 @@ import threading
 import time
 from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 from typing import List, Optional, Tuple
 
 from invisible_playwright.async_api import InvisiblePlaywright
@@ -112,25 +113,28 @@ def _to_client_cookies(cookies: list) -> list:
 def _to_playwright_cookies(cookies: list, url: str) -> list:
     """Client-supplied cookies to Playwright's shape, accepting either dialect.
 
-    Anchored to ``url`` when the caller did not say where a cookie belongs.
     Playwright refuses a cookie carrying neither a url nor a domain/path pair,
-    and refuses the whole batch, so `{"name": "a", "value": "1"}` (the shape the
-    README documents and the one FlareSolverr clients send) failed the entire
-    request on this engine while working on the Chrome one. Selenium's add_cookie
-    defaults such a cookie to the page it is on, so anchoring to the request URL
-    is the same behaviour, not a new one. A domain without a path gets Selenium's
-    default of "/" for the same reason.
+    and refuses the whole batch with it, so `{"name": "a", "value": "1"}` (the
+    shape the README documents and the one FlareSolverr clients send) failed the
+    entire request on this engine while working on the Chrome one.
+
+    A cookie that does not say where it belongs is filled in from the request
+    URL: its host as the domain and "/" as the path, which is what Selenium's
+    add_cookie does with the same cookie. Not `url`, even though Playwright
+    accepts one: `url` and `path` are mutually exclusive there, so a cookie that
+    named a path and no domain still failed the whole request, and `url` alone
+    scopes the cookie to that URL's directory rather than to the whole site.
     """
+    host = urlsplit(url).hostname or ""
     converted = []
     for cookie in cookies:
         translated = {k: v for k, v in cookie.items() if k in _PLAYWRIGHT_COOKIE_KEYS}
         if "expires" not in translated and cookie.get("expiry") is not None:
             translated["expires"] = float(cookie["expiry"])
         if not translated.get("url"):
-            if translated.get("domain"):
-                translated.setdefault("path", "/")
-            else:
-                translated["url"] = url
+            if not translated.get("domain"):
+                translated["domain"] = host
+            translated.setdefault("path", "/")
         converted.append(translated)
     return converted
 
