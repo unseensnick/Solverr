@@ -29,7 +29,6 @@ _LOCALIZED_CHALLENGES = {
     'id="challenge-form"': '<form id="challenge-form" action="/"></form>',
     'id="challenge-stage"': '<div id="challenge-stage"></div>',
     'id="challenge-error': '<div id="challenge-error-title">Error</div>',
-    'turnstile-wrapper': '<div id="turnstile-wrapper"></div>',
 }
 
 
@@ -89,6 +88,21 @@ class TestChallengeVerdict(unittest.TestCase):
 
     def test_every_marker_has_a_page_that_exercises_it(self):
         self.assertEqual(set(_LOCALIZED_CHALLENGES), set(CHALLENGE_HTML_MARKERS))
+
+
+
+class SolvedPagesAreNotChallenges(unittest.TestCase):
+    """What a solved page may carry without being sent back for another solve."""
+
+    def test_a_sites_own_turnstile_widget_is_not_a_challenge(self):
+        # A login form with its own Turnstile. Matching this forced a pointless
+        # second solve on the other engine and made the passthrough refuse to
+        # cache a perfectly good page.
+        page = ('<html><head><title>Sign in</title></head><body>'
+                '<div id="turnstile-wrapper"><input name="cf-turnstile-response"></div>'
+                '</body></html>')
+
+        self.assertFalse(detection.looks_like_challenge_html(page))
 
 
 if __name__ == '__main__':

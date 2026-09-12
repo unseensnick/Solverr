@@ -6,6 +6,8 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ### Fixes
 
+- **A session's browser is no longer closed moments after a long request finishes.** Idle time was counted from the start of the last request on the session, so a solve that ran longer than `SESSION_TTL_MINUTES` left the session looking that idle the instant it returned, and the next cleanup pass closed a browser a request had just finished with. It is counted from the end of the request now.
+- **The startup log now says when `SESSION_TTL_MINUTES` or `SESSION_MAX` is set to `0` or less, which switches off idle session cleanup and the per-engine session cap respectively.** Both were printed as `0`, which reads as the most aggressive setting rather than as off.
 - **The passthrough port now honours `HOST` like the API port does, instead of accepting connections on every interface.** Setting `HOST` to restrict which interface Solverr answers on covered port 8191 only; the passthrough bound every interface regardless, so it stayed reachable from anywhere the container was.
 - **The passthrough now keeps one warm browser session per site instead of launching a browser for every request.** It was documented as reusing sessions and never named one, so each request paid a full browser launch and met the challenge again from cold.
 - **One slow passthrough client no longer holds up every other passthrough request.** A body served from the cache was written to the client while the shared cache lock was held, so every request arriving meanwhile waited for that client to finish reading.
@@ -31,6 +33,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 - **A `request.post` to a URL containing a `%` or a `#` now posts to that URL, instead of a mangled or truncated one.** The form's target was escaped for the markup but not for the decode the browser does first. A field name carrying a quote can no longer break out of the form either.
 - **A Turnstile checkbox that Cloudflare adds after the page first renders is now clicked on the Camoufox engine, instead of being waited out.** Whether there was a checkbox to press was decided once, before the wait began, so a challenge that started as a plain interstitial and then grew one ran to its deadline untouched. The read that follows a filled token also survives the navigation it triggers, rather than failing the request.
 - **Configuring a paid CAPTCHA solver no longer turns a hard challenge into a timeout.** The escalation started only once the solve deadline had passed, with a couple of seconds left before the request had to answer, so it never finished. It is given its own room inside the budget now.
+- **A page carrying a site's own Turnstile widget, such as a login form, is no longer treated as an unsolved challenge.** It was sent to the other engine to be solved again and the passthrough refused to cache it, though the page was exactly what was asked for.
 - **Form POST requests from Prowlarr work again, instead of failing with "Request parameter 'headers' must be a list".** 1.6.0 started checking the type of the deprecated `headers` field, which Solverr has never read and which clients send as an object; it is accepted in any shape again and still ignored.
 
 ## [1.6.0]

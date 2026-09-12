@@ -67,15 +67,18 @@ INTERSTITIAL_SELECTORS = [
 # CHALLENGE_SELECTORS for pre-solve browser detection, where over-matching only
 # costs a redundant solve attempt on an already-clear page). The challenge-form /
 # challenge-stage markers keep coverage for interstitials whose title is
-# localized (e.g. "Vent litt ...") and so slips past the title check;
-# turnstile-wrapper keeps coverage for an unsolved Turnstile gate.
+# localized (e.g. "Vent litt ...") and so slips past the title check.
+#
+# A bare "turnstile-wrapper" is deliberately NOT here either: a site's own login
+# widget carries it on a perfectly solved page, and every Cloudflare gate that
+# wraps a widget also carries one of the markers above, so it only cost a wasted
+# fallback and an uncacheable response.
 CHALLENGE_HTML_MARKERS = (
     'window._cf_chl_opt',
     'cf-challenge-running',
     'id="challenge-form"',
     'id="challenge-stage"',
     'id="challenge-error',
-    'turnstile-wrapper',
 )
 
 
