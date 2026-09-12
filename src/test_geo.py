@@ -18,6 +18,9 @@ from engines import chrome_engine
 
 PROXY = {"url": "http://proxy.tld:8080", "username": "proxyuser", "password": "s3cr3t-pass"}
 OTHER_PROXY = {"url": "http://other.tld:8080"}
+# One residential endpoint, two exit countries, selected by the username.
+US_EXIT = {"url": "http://proxy.tld:8080", "username": "user-country-us", "password": "s3cr3t-pass"}
+DE_EXIT = {"url": "http://proxy.tld:8080", "username": "user-country-de", "password": "s3cr3t-pass"}
 
 
 def _tz(proxy):
@@ -95,6 +98,32 @@ class PinnedTimezoneTest(unittest.TestCase):
              patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')):
             self.assertEqual(_tz(PROXY), 'Europe/Berlin')
 
+    def test_pinning_both_halves_costs_no_lookup(self):
+        # The language half used to resolve regardless, which is up to two
+        # IP-echo round trips inside the solve budget on a host with no egress.
+        with _env(BROWSER_TIMEZONE='America/Chicago', LANG='de_DE.UTF-8'), \
+             patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')) as resolve:
+            geo.browser_identity(geo.proxy_to_config(PROXY))
+        resolve.assert_not_called()
+
+    def test_a_pinned_zone_is_not_looked_up_for_the_language(self):
+        asked = []
+        with _env(BROWSER_TIMEZONE='America/Chicago'), \
+             patch.object(geo, '_load_resolver',
+                          return_value=(lambda tz, _p: asked.append(tz) or _Geo(tz, None),
+                                        lambda _ip, _p: 'de-DE')):
+            geo.browser_language(geo.proxy_to_config(PROXY))
+        self.assertEqual(asked, ['America/Chicago'])
+
+    def test_a_pinned_language_is_not_looked_up_for_the_zone(self):
+        asked = []
+        with _env(LANG='de_DE.UTF-8'), \
+             patch.object(geo, '_load_resolver',
+                          return_value=(lambda _tz, _p: _Geo('Europe/Berlin', None),
+                                        lambda ip, _p: asked.append(ip) or 'nb-NO')):
+            geo.browser_identity(geo.proxy_to_config(PROXY))
+        self.assertEqual(asked, [])
+
 
 class ResolvedTimezoneTest(unittest.TestCase):
 
@@ -124,6 +153,72 @@ class ResolvedTimezoneTest(unittest.TestCase):
             _tz(PROXY)
             _tz(OTHER_PROXY)
         self.assertEqual(resolve.call_count, 2)
+
+    def test_exits_differing_only_by_username_are_resolved_separately(self):
+        # A residential provider picks the exit country through the username, so
+        # one server with two usernames is two countries, not one cached zone.
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')) as resolve:
+            _tz(US_EXIT)
+            _tz(DE_EXIT)
+        self.assertEqual(resolve.call_count, 2)
+
+    def test_the_cache_key_does_not_carry_the_password(self):
+        self.assertNotIn('s3cr3t-pass', geo._cache_key(geo.proxy_to_config(PROXY)))
+
+
+class _Clock:
+    """A monotonic clock a test can advance, in place of geo's time module."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+
+class FailedResolutionCacheTest(unittest.TestCase):
+    """A bad moment must not pin the fallback pair for the whole session TTL."""
+
+    def setUp(self):
+        geo.reset_cache()
+
+    def test_a_failure_is_not_looked_up_again_inside_its_window(self):
+        with _env(), patch.object(geo, 'time', _Clock()), \
+             patch.object(geo, '_from_egress', return_value=(None, None)) as resolve:
+            _tz(PROXY)
+            _tz(PROXY)
+        self.assertEqual(resolve.call_count, 1)
+
+    def test_a_failure_is_looked_up_again_once_its_window_passes(self):
+        clock = _Clock()
+        with _env(), patch.object(geo, 'time', clock), \
+             patch.object(geo, '_from_egress', return_value=(None, None)) as resolve:
+            _tz(PROXY)
+            clock.now += geo._FAILURE_CACHE_SECONDS + 1
+            _tz(PROXY)
+        self.assertEqual(resolve.call_count, 2)
+
+    def test_a_resolved_pair_outlives_that_window(self):
+        clock = _Clock()
+        with _env(), patch.object(geo, 'time', clock), \
+             patch.object(geo, '_from_egress',
+                          return_value=('Europe/Berlin', 'de-DE')) as resolve:
+            _tz(PROXY)
+            clock.now += geo._FAILURE_CACHE_SECONDS + 1
+            _tz(PROXY)
+        self.assertEqual(resolve.call_count, 1)
+
+    def test_a_failure_never_replaces_a_resolved_pair(self):
+        def resolved_meanwhile(proxy_config, *hints):
+            # Another thread resolved the same exit while this lookup was out:
+            # the lookups run outside the lock, so the slow failing one lands
+            # last and used to overwrite the good answer.
+            with patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')):
+                geo._resolved(proxy_config, *hints)
+            return None, None
+
+        with _env(), patch.object(geo, '_from_egress', side_effect=resolved_meanwhile):
+            self.assertEqual(_tz(PROXY), 'Europe/Berlin')
 
 
 class _Geo:

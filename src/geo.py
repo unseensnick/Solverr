@@ -24,6 +24,7 @@ one), so it discards the IP it looked up and `resolve_session_locale` goes and
 finds it again. Both are cached here afterwards, so it is two round trips per
 process, not per request.
 """
+import hashlib
 import logging
 import os
 import threading
@@ -39,6 +40,14 @@ import redact
 # disabled) from meaning "resolve on every launch".
 _MIN_CACHE_SECONDS = 300
 
+# How long a failed lookup is remembered. Short, because the fallback pair is a
+# guess: caching it for the session TTL meant one unreachable moment pinned a
+# wrong timezone and language for the rest of the window. Long enough that a
+# burst of requests shares one failure instead of each paying for it again: a
+# failing lookup spends up to 30 seconds (three IP-echo endpoints, 10 seconds
+# each) before it gives up.
+_FAILURE_CACHE_SECONDS = 60
+
 # What the language falls back to when nothing can be resolved. Matches what
 # invisible_core itself falls back to, so the two never disagree.
 _DEFAULT_LANGUAGE = "en-US"
@@ -48,7 +57,7 @@ _DEFAULT_LANGUAGE = "en-US"
 _ZONE_TAB_PATHS = ("/usr/share/zoneinfo/zone1970.tab", "/usr/share/zoneinfo/zone.tab")
 
 _lock = threading.Lock()
-_cache = {}  # proxy server -> (expires_monotonic, zone, language)
+_cache = {}  # exit identity -> (expires_monotonic, zone, language, complete)
 _geo_zones = {}  # BROWSER_GEO tag -> zone or None
 _zone_table_cache = None
 _known_zones_cache = None
@@ -97,16 +106,10 @@ def browser_timezone(proxy_config: Optional[dict] = None) -> str:
     Can block for as long as the egress lookup takes, so call it off the stealth
     event loop.
     """
-    configured = config.browser_timezone()
-    if configured and configured.lower() != 'auto':
-        return configured
-    if not configured:
-        # An explicit BROWSER_TIMEZONE=auto asks for the exit IP, so it overrides
-        # BROWSER_GEO. Only an unset one lets BROWSER_GEO supply the zone.
-        from_geo = _zone_from_geo()
-        if from_geo:
-            return from_geo
-    return _resolved(proxy_config)[0]
+    # The language is passed as a hint, not read: when it is pinned there is
+    # nothing for the lookup to derive, and skipping it saves an IP-echo round
+    # trip that spends up to 30 seconds failing on a host with no egress.
+    return _pinned_zone() or _resolved(proxy_config, None, config.browser_locale())[0]
 
 
 def browser_language(proxy_config: Optional[dict] = None) -> str:
@@ -119,8 +122,12 @@ def browser_language(proxy_config: Optional[dict] = None) -> str:
 
     LANG and BROWSER_GEO win, in that order. Otherwise it comes from the same
     exit IP the timezone does, so the two cannot contradict each other.
+
+    A pinned BROWSER_TIMEZONE is passed to the lookup rather than resolved
+    again, so pinning the zone leaves at most the one round trip the language
+    itself needs.
     """
-    return config.browser_locale() or _resolved(proxy_config)[1]
+    return config.browser_locale() or _resolved(proxy_config, _pinned_zone(), None)[1]
 
 
 def browser_identity(proxy_config: Optional[dict] = None) -> tuple:
@@ -139,8 +146,19 @@ def accept_language(tag: str) -> str:
     return f"{tag}, {base}" if base != tag else tag
 
 
-def _resolved(proxy_config: Optional[dict]) -> tuple:
-    """(timezone, language) for the exit IP, resolved once per proxy and cached.
+def _pinned_zone() -> Optional[str]:
+    """The zone configuration fixes, or None when it comes from the exit IP."""
+    configured = config.browser_timezone()
+    if configured:
+        # An explicit BROWSER_TIMEZONE=auto asks for the exit IP, so it overrides
+        # BROWSER_GEO. Only an unset one lets BROWSER_GEO supply the zone.
+        return None if configured.lower() == 'auto' else configured
+    return _zone_from_geo()
+
+
+def _resolved(proxy_config: Optional[dict], pinned_zone: Optional[str],
+              pinned_language: Optional[str]) -> tuple:
+    """(timezone, language) for the exit IP, resolved once per exit and cached.
 
     Both are derived from the same exit IP so they cannot disagree about the
     country, which is the pairing that matters: the library's own comment notes
@@ -149,21 +167,42 @@ def _resolved(proxy_config: Optional[dict]) -> tuple:
     proxy that is one lookup; on a direct connection it is two (see the module
     docstring), which is why this is cached rather than called per launch.
     """
-    key = (proxy_config or {}).get("server") or ""
+    key = _cache_key(proxy_config)
 
-    now = time.monotonic()
     with _lock:
         cached = _cache.get(key)
-        if cached is not None and cached[0] > now:
+        if cached is not None and cached[0] > time.monotonic():
             return cached[1], cached[2]
 
-    zone, language = _from_egress(proxy_config)
+    zone, language = _from_egress(proxy_config, pinned_zone, pinned_language)
+    complete = bool(zone) and bool(language)
     zone = zone or container_timezone()
     language = language or _DEFAULT_LANGUAGE
 
     with _lock:
-        _cache[key] = (time.monotonic() + _cache_seconds(), zone, language)
+        cached = _cache.get(key)
+        if not complete and cached is not None and cached[3] and cached[0] > time.monotonic():
+            # The lookup runs outside the lock, so a slow failing one can land
+            # after a fast successful one. Letting the last writer win would put
+            # the fallback pair in place of an answer already known to be right.
+            return cached[1], cached[2]
+        ttl = _cache_seconds() if complete else _FAILURE_CACHE_SECONDS
+        _cache[key] = (time.monotonic() + ttl, zone, language, complete)
     return zone, language
+
+
+def _cache_key(proxy_config: Optional[dict]) -> str:
+    """Which exit a lookup goes through, as a cache key.
+
+    The credentials are part of the identity: residential providers pick the
+    exit country through the username, so two configs that differ only there
+    leave from two different countries and cannot share a resolved zone. Hashed
+    rather than kept whole, so the key cannot carry the proxy password into a
+    log line or a debugger view of the cache.
+    """
+    cfg = proxy_config or {}
+    parts = (cfg.get("server") or "", cfg.get("username") or "", cfg.get("password") or "")
+    return hashlib.sha256("\x00".join(parts).encode()).hexdigest()
 
 
 def _zone_from_geo() -> Optional[str]:
@@ -344,8 +383,15 @@ def _load_resolver():
         return None
 
 
-def _from_egress(proxy_config: Optional[dict]) -> tuple:
+def _from_egress(proxy_config: Optional[dict], pinned_zone: Optional[str] = None,
+                 pinned_language: Optional[str] = None) -> tuple:
     """(zone, language) for the egress IP; either is None if it wasn't found.
+
+    A pinned half is handed back untouched instead of being looked up. The
+    pinned zone still goes into the library call, because behind a proxy that
+    call is what discovers the exit IP the language needs; handing it a concrete
+    zone returns it before its own geoip lookup and before the branch that
+    raises, and on a direct connection before any request at all.
 
     Swallows everything on purpose: this is the difference between a browser
     that launches with a slightly wrong timezone and no browser at all. The
@@ -354,16 +400,16 @@ def _from_egress(proxy_config: Optional[dict]) -> tuple:
     """
     resolver = _load_resolver()
     if resolver is None:
-        return None, None
+        return pinned_zone, pinned_language
     prepare, resolve_locale = resolver
 
-    zone, egress_ip = None, None
+    zone, egress_ip = pinned_zone, None
     try:
         # Behind a proxy this hands back the exit IP alongside the zone and the
         # language resolver reuses it. Without one it reports no IP (the field
         # exists for the WebRTC override), so the resolver below looks it up
         # again; both answers are cached by the caller either way.
-        session = prepare("", proxy_config)
+        session = prepare(pinned_zone or "", proxy_config)
         zone, egress_ip = (session.timezone or None), session.egress_ip
     except Exception as e:
         # Server only, never the dict, and redacted: a proxy URL can carry its
@@ -374,6 +420,8 @@ def _from_egress(proxy_config: Optional[dict]) -> tuple:
                         redact.url(server) if server else "the direct connection",
                         redact.proxy_text(str(e), proxy_config), container_timezone())
 
+    if pinned_language:
+        return zone, pinned_language
     try:
         language = resolve_locale(egress_ip, proxy_config) or None
     except Exception:

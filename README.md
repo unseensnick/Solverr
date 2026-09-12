@@ -375,7 +375,8 @@ Set something only when you need a specific result. There are three knobs and th
 | nothing | Timezone and language both from the exit IP | once per proxy |
 | `BROWSER_GEO=de-DE` | German, `Europe/Berlin` | no |
 | `LANG=de-DE` | German, timezone still from the exit IP | once per proxy |
-| `BROWSER_TIMEZONE=Europe/Berlin` | `Europe/Berlin`, language unchanged | no |
+| `BROWSER_TIMEZONE=Europe/Berlin` | `Europe/Berlin`, language still from the exit IP | once per proxy, for the language |
+| `BROWSER_TIMEZONE=Europe/Berlin` and `LANG=de-DE` | `Europe/Berlin`, German | no |
 | `BROWSER_TIMEZONE=auto` | Exit IP, ignoring any `BROWSER_GEO` | once per proxy |
 
 `LANG` and `BROWSER_TIMEZONE` each override `BROWSER_GEO` for their own half, so `BROWSER_GEO=en-US` with `BROWSER_TIMEZONE=America/Chicago` gives American English on Chicago time.
@@ -397,11 +398,11 @@ Anything that isn't a language tag is ignored with a warning in the log rather t
 
 Whatever the language ends up being, both engines report it as the two-entry `navigator.languages` a desktop browser sends: `de-DE` becomes `["de-DE", "de"]`.
 
-**`BROWSER_TIMEZONE`** takes any IANA zone. Pinning it costs no lookup, so it is also how an air-gapped deployment skips the exit-IP check entirely.
+**`BROWSER_TIMEZONE`** takes any IANA zone. Pinning it costs no timezone lookup, but the language still comes from the exit IP, so an air-gapped deployment sets `LANG` as well, or uses `BROWSER_GEO`, to skip the check entirely.
 
 Two things worth knowing. Forcing a language a country doesn't speak, or a timezone it isn't in, is a mismatch a site can see, so change one only if you know why. And some countries share a timezone definition with a neighbour: Norway reports `Europe/Berlin` and the Netherlands `Europe/Brussels`, which is correct rather than a bug, since those are the same zone with the same offset and the same daylight-saving rules.
 
-If the exit IP can't be reached, Solverr falls back to the container's `TZ` for the timezone and `en-US` for the language, logs a warning, and carries on; it does not fail the request. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
+If the exit IP can't be reached, Solverr falls back to the container's `TZ` for the timezone and `en-US` for the language, logs a warning, and carries on; it does not fail the request. That fallback is kept for a minute and then looked up again, so a moment without network doesn't hold the wrong country in place for the rest of the cache window. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
 
 ## Proxy & reliability
 
