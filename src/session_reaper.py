@@ -28,9 +28,25 @@ class SessionReaper:
         if self._interval <= 0:
             logging.info("Session reaper disabled (REAPER_INTERVAL_SECONDS <= 0)")
             return
-        logging.info("Session reaper started (ttl=%s, max=%s/engine, every %ss)",
-                     self._ttl, self._max, self._interval)
+        logging.info("Session reaper started (%s, %s, every %ss)",
+                     self._describe_ttl(), self._describe_cap(), self._interval)
         self._thread.start()
+
+    def _describe_ttl(self) -> str:
+        """A TTL of zero or less is `reap_idle` doing nothing, so say that.
+
+        Printing `ttl=0` reads as the most aggressive setting there is, which is
+        the opposite of what it means.
+        """
+        if self._ttl is None or self._ttl.total_seconds() <= 0:
+            return "idle reaping off (SESSION_TTL_MINUTES <= 0)"
+        return f"ttl={self._ttl}"
+
+    def _describe_cap(self) -> str:
+        """Same for the cap: zero or less is `enforce_cap` doing nothing."""
+        if self._max is None or self._max <= 0:
+            return "no session cap (SESSION_MAX <= 0)"
+        return f"max={self._max}/engine"
 
     def stop(self):
         self._stop.set()

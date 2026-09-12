@@ -10,8 +10,11 @@ across requests.
 import asyncio
 import base64
 import logging
+import threading
+import time
 from concurrent.futures import TimeoutError as FuturesTimeout
-from datetime import datetime, timedelta
+from datetime import timedelta
+from urllib.parse import urlsplit
 from typing import List, Optional, Tuple
 
 from invisible_playwright.async_api import InvisiblePlaywright
@@ -33,6 +36,11 @@ from sessions import SessionStore
 # Best-effort settle waits are bounded; the hard navigation cap comes from the
 # request's maxTimeout via asyncio.wait_for in _do_solve.
 _NETWORKIDLE_MS = 5000
+
+# What disableMedia blocks. Playwright names resource types, Chrome matches URL
+# patterns (_MEDIA_BLOCK_URLS there), and both spell out the same three kinds:
+# one request option cannot mean different things on the two engines.
+_BLOCKED_RESOURCE_TYPES = ("image", "stylesheet", "font")
 
 # A returned document is base64-encoded on top of the raw bytes and copied again
 # by the JSON response, so cap what we are willing to pull into memory.
@@ -65,6 +73,16 @@ _WIDGET_READ_SECONDS = 5
 # of it restarts the verification, so a landed press earns a cooldown while a
 # press that found nothing to hit may retry on the next pass.
 _CLICK_COOLDOWN_SECONDS = 4
+
+# What the paid CAPTCHA escalation is allowed, kept back from the solve deadline
+# when one is configured. It is a round trip to the provider and back, and a
+# 2captcha Turnstile answer takes tens of seconds; without the reservation it
+# began with only the response margin left and never finished.
+_API_SOLVE_SECONDS = 30
+
+# How long a browser gets to shut down. Generous because cutting the teardown
+# short is worse than waiting: the step that reaps the browser process runs last.
+_CLOSE_TIMEOUT_SECONDS = 60
 _POLL_SECONDS = 1.5
 
 # Cloudflare drops the challenge markup while it issues the next round, so a
@@ -105,25 +123,28 @@ def _to_client_cookies(cookies: list) -> list:
 def _to_playwright_cookies(cookies: list, url: str) -> list:
     """Client-supplied cookies to Playwright's shape, accepting either dialect.
 
-    Anchored to ``url`` when the caller did not say where a cookie belongs.
     Playwright refuses a cookie carrying neither a url nor a domain/path pair,
-    and refuses the whole batch, so `{"name": "a", "value": "1"}` (the shape the
-    README documents and the one FlareSolverr clients send) failed the entire
-    request on this engine while working on the Chrome one. Selenium's add_cookie
-    defaults such a cookie to the page it is on, so anchoring to the request URL
-    is the same behaviour, not a new one. A domain without a path gets Selenium's
-    default of "/" for the same reason.
+    and refuses the whole batch with it, so `{"name": "a", "value": "1"}` (the
+    shape the README documents and the one FlareSolverr clients send) failed the
+    entire request on this engine while working on the Chrome one.
+
+    A cookie that does not say where it belongs is filled in from the request
+    URL: its host as the domain and "/" as the path, which is what Selenium's
+    add_cookie does with the same cookie. Not `url`, even though Playwright
+    accepts one: `url` and `path` are mutually exclusive there, so a cookie that
+    named a path and no domain still failed the whole request, and `url` alone
+    scopes the cookie to that URL's directory rather than to the whole site.
     """
+    host = urlsplit(url).hostname or ""
     converted = []
     for cookie in cookies:
         translated = {k: v for k, v in cookie.items() if k in _PLAYWRIGHT_COOKIE_KEYS}
         if "expires" not in translated and cookie.get("expiry") is not None:
             translated["expires"] = float(cookie["expiry"])
         if not translated.get("url"):
-            if translated.get("domain"):
-                translated.setdefault("path", "/")
-            else:
-                translated["url"] = url
+            if not translated.get("domain"):
+                translated["domain"] = host
+            translated.setdefault("path", "/")
         converted.append(translated)
     return converted
 
@@ -165,20 +186,12 @@ class StealthContext:
 
     def __init__(self, proxy_config: Optional[dict]):
         self.proxy_config = proxy_config
-        self.created_at = datetime.now()
-        self.last_used = self.created_at
         self.lock = asyncio.Lock()
         self._ip = None
         self.browser = None
         self.context = None
         self.page = None
         self.user_agent = ""
-
-    def lifetime(self) -> timedelta:
-        return datetime.now() - self.created_at
-
-    def idle(self) -> timedelta:
-        return datetime.now() - self.last_used
 
     async def start(self):
         # Resolved here, not left to the library: handing it a concrete zone
@@ -220,11 +233,17 @@ class StealthContext:
 
 class StealthEngine(Engine):
     name = "stealth"
+    # Clicks the checkbox by coordinate, so it needs no tab count to reach one.
+    presses_checkbox_unaided = True
 
     def __init__(self):
         self._runtime = get_runtime()
         self._sessions = SessionStore(build=self._start_context,
                                       teardown=self._close_context)
+        # How long the request on this thread may spend launching a browser.
+        # A session's browser is launched from inside SessionStore.get, which
+        # fixes the signature, so the share reaches _start_context this way.
+        self._launch_budget = threading.local()
 
     # ---- session registry (controller-facing) -------------------------------
     #
@@ -235,8 +254,10 @@ class StealthEngine(Engine):
 
     def _start_context(self, proxy: Optional[dict]) -> "StealthContext":
         ctx = StealthContext(geo.proxy_to_config(proxy))
+        allowed = min(getattr(self._launch_budget, "seconds", None) or config.stealth_start_timeout(),
+                      config.stealth_start_timeout())
         try:
-            self._runtime.run(ctx.start(), timeout=config.stealth_start_timeout())
+            self._runtime.run(ctx.start(), timeout=allowed)
         except Exception:
             # start() may already have launched the browser before failing.
             self._close_context(ctx)
@@ -244,7 +265,21 @@ class StealthEngine(Engine):
         return ctx
 
     def _close_context(self, ctx: "StealthContext") -> None:
-        self._runtime.run(ctx.close(), timeout=60)
+        self._close_bounded(ctx)
+
+    def _close_bounded(self, ctx: "StealthContext") -> None:
+        """Close a context, and say so when the cap cuts the teardown short.
+
+        The library closes the browser and then stops the driver, and only the
+        second step reaps the browser process, so a teardown cancelled between
+        them leaves one behind. Nothing here can finish that job, so the cap is
+        generous and a request to look is louder than debug.
+        """
+        try:
+            self._runtime.run(ctx.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        except FuturesTimeout:
+            logging.warning("stealth browser did not shut down within %ss; a browser process "
+                            "may be left behind", _CLOSE_TIMEOUT_SECONDS)
 
     def session_ids(self) -> List[str]:
         return self._sessions.session_ids()
@@ -252,16 +287,13 @@ class StealthEngine(Engine):
     def exists(self, session_id: str) -> bool:
         return self._sessions.exists(session_id)
 
-    def create_session(self, session_id: Optional[str] = None, proxy: Optional[dict] = None,
-                       force_new: bool = False) -> Tuple[str, bool]:
-        session, fresh = self._sessions.create(session_id, proxy, force_new)
+    def create_session(self, session_id: Optional[str] = None,
+                       proxy: Optional[dict] = None) -> Tuple[str, bool]:
+        session, fresh = self._sessions.create(session_id, proxy)
         return session.session_id, fresh
 
     def destroy_session(self, session_id: str) -> bool:
         return self._sessions.destroy(session_id)
-
-    def touch(self, session_id: str) -> None:
-        self._sessions.touch(session_id)
 
     def reap_idle(self, ttl: timedelta) -> List[str]:
         return self._sessions.reap_idle(ttl)
@@ -272,42 +304,81 @@ class StealthEngine(Engine):
     # ---- solving ------------------------------------------------------------
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
+        # The share starts here, not once the browser is up. Launching Camoufox
+        # takes seconds, and they used to be spent outside the budget: a session
+        # launch was bounded only by STEALTH_START_TIMEOUT, and a per-request one
+        # could take a full share of its own before the solve clock started.
+        started = time.monotonic()
+        self._launch_budget.seconds = timeout
         own_ctx = False
         # get() hands the session over already marked in use, so the reaper and
         # the cap cannot close the browser under this request. Released in the
         # finally below, exactly as the Chrome engine does it.
         in_use = None
-        if req.session:
-            ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
-            session, _ = self._sessions.get(req.session, ttl, req.proxy)
-            in_use = session
-            ctx = session.payload
-        else:
-            ctx = StealthContext(geo.proxy_to_config(req.proxy))
-            # Owned before start(): a launch that fails or times out has usually
-            # already spawned the browser, and only the finally below closes it.
-            own_ctx = True
+        # The session lock this request holds, released in the finally below.
+        locked = None
+        ctx = None
+        # Inside the try, exactly as the Chrome engine does it: a session whose
+        # browser fails to launch used to escape unwrapped, so the client got a
+        # bare message (an empty one on a launch timeout) instead of the
+        # "Error solving the challenge." the other engine reports.
         try:
+            if req.session:
+                ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
+                session, _ = self._sessions.get(req.session, ttl, req.proxy)
+                in_use = session
+                # One request at a time on this browser, the same rule the
+                # Chrome engine follows, taken before the context's own lock so
+                # the wait happens on the request thread and counts against the
+                # share rather than queueing up on the event loop.
+                if not session.lock.acquire(timeout=budget.remaining_share(started, timeout)):
+                    raise Exception("Timed out waiting for session '%s' to be free." % req.session)
+                locked = session.lock
+                ctx = session.payload
+            else:
+                ctx = StealthContext(geo.proxy_to_config(req.proxy))
+                # Owned before start(): a launch that fails or times out has
+                # usually already spawned the browser, and only the finally
+                # below closes it.
+                own_ctx = True
             if own_ctx:
-                self._runtime.run(ctx.start(), timeout=min(timeout, config.stealth_start_timeout()))
-            return self._runtime.run(self._do_solve(req, ctx, method, timeout), timeout=timeout + 5)
+                self._runtime.run(ctx.start(),
+                                  timeout=min(budget.remaining_share(started, timeout),
+                                              config.stealth_start_timeout()))
+            left = budget.remaining_share(started, timeout)
+            return self._runtime.run(self._do_solve(req, ctx, method, left), timeout=left + 5)
         except FuturesTimeout:
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
+            self._launch_budget.seconds = None
+            if locked is not None:
+                locked.release()
             if in_use is not None:
                 self._sessions.end_use(in_use)
-            if own_ctx:
+            if own_ctx and ctx is not None:
                 try:
-                    self._runtime.run(ctx.close(), timeout=60)
+                    self._close_bounded(ctx)
                 except Exception:
                     logging.debug("stealth ctx teardown failed", exc_info=True)
 
     async def _do_solve(self, req: V1RequestBase, ctx: StealthContext, method: str,
                         timeout: float) -> SolveResult:
+        # The timeout covers the wait for the context as well as the solve. It
+        # used to start only once the lock was taken, while the caller's hard cap
+        # had been running since the request was submitted, so a queued request
+        # was killed by the outer one with no verdict to hand back.
+        return await asyncio.wait_for(self._locked_solve(req, ctx, method, timeout),
+                                      timeout=timeout)
+
+    async def _locked_solve(self, req: V1RequestBase, ctx: StealthContext, method: str,
+                            timeout: float) -> SolveResult:
+        loop = asyncio.get_running_loop()
+        queued_at = loop.time()
         async with ctx.lock:
-            return await asyncio.wait_for(self._navigate_and_solve(req, ctx, method, timeout), timeout=timeout)
+            left = max(1.0, timeout - (loop.time() - queued_at))
+            return await self._navigate_and_solve(req, ctx, method, left)
 
     async def _navigate_and_solve(self, req: V1RequestBase, ctx: StealthContext,
                                   method: str, timeout: float) -> SolveResult:
@@ -328,7 +399,10 @@ class StealthEngine(Engine):
             block_handler = None
             if disable_media:
                 async def block_handler(route):
-                    if route.request.resource_type in ("image", "media", "font"):
+                    # The same three kinds the Chrome engine blocks and the
+                    # README promises. Byparr blocks media here instead of
+                    # stylesheets, which made one option mean two things.
+                    if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
                         await route.abort()
                     else:
                         await route.continue_()
@@ -378,6 +452,10 @@ class StealthEngine(Engine):
             nonlocal click, page
             if click is None:
                 target = await ctx.context.new_page()
+                # Registered before the solver is prepared: preparing it can
+                # raise or be cancelled, and the teardown below only closes what
+                # is registered, so the page stayed open in a session's context.
+                click = (target, None, None)
                 solver_cm = ClickSolver(framework=FrameworkType.PLAYWRIGHT, page=target,
                                         max_attempts=config.stealth_max_attempts(),
                                         attempt_delay=1)
@@ -415,8 +493,7 @@ class StealthEngine(Engine):
                 kind, is_turnstile = await self._detect_settled(page)
 
             if kind == "denied":
-                raise Exception('Cloudflare has blocked this request. '
-                                'Probably your IP is banned for this site, check in your web browser.')
+                raise Exception(pipeline.BLOCKED_MESSAGE)
 
             if kind == "challenge":
                 captcha_type = (CaptchaType.CLOUDFLARE_TURNSTILE if is_turnstile
@@ -429,13 +506,25 @@ class StealthEngine(Engine):
                 # verdict (which the controller can retry on the other engine) into
                 # a timeout error.
                 deadline = budget.solve_deadline(started, timeout)
+                if config.api_solver_enabled():
+                    # Leave the escalation room to work, but only when there is
+                    # room for both. It is a network round trip to the provider
+                    # and back, so starting it after the solve deadline left it
+                    # whatever the response margin was and it never finished.
+                    # Taking the reserve out of a share that cannot fit both is
+                    # worse than not escalating: it cancels the free solve for a
+                    # paid one that cannot finish either.
+                    room = deadline - asyncio.get_running_loop().time()
+                    if room > 2 * _API_SOLVE_SECONDS:
+                        deadline -= _API_SOLVE_SECONDS
                 # Both kinds are handled on the context's own page: an interstitial
                 # clears itself, and a widget is clicked by coordinate, so neither
                 # needs the solver's init scripts. Only the paid escalation below
                 # does, and it moves to the throwaway page for them.
-                solved = await self._wait_until_cleared(None, page, captcha_type, deadline)
+                solved = await self._wait_until_cleared(page, deadline)
 
-                # Escalate to the paid CAPTCHA API only if configured and still stuck.
+                # Escalate to the paid CAPTCHA API only if configured and still
+                # stuck. The budget for it was kept back above.
                 if not solved and config.api_solver_enabled():
                     logging.info("Escalating to paid CAPTCHA API solver (%s)...",
                                  config.captcha_provider())
@@ -450,9 +539,18 @@ class StealthEngine(Engine):
                 # separate document that the interstitial only submits for once its
                 # markup is gone: waiting for domcontentloaded alone returns at once
                 # whenever the challenge page itself is still the current document.
+                # Bounded by the same deadline the solve was, not a fixed
+                # 5s per state: two of those on top of a solve that ran to its
+                # deadline overran the share and turned a late clear into a
+                # timeout error instead of the page it had just reached.
+                loop = asyncio.get_running_loop()
                 for state in ("domcontentloaded", "networkidle"):
+                    left_ms = int((deadline - loop.time()) * 1000)
+                    if left_ms <= 0:
+                        logging.debug("no budget left to let the %s state settle", state)
+                        break
                     try:
-                        await page.wait_for_load_state(state, timeout=_NETWORKIDLE_MS)
+                        await page.wait_for_load_state(state, timeout=min(_NETWORKIDLE_MS, left_ms))
                     except Exception:
                         logging.debug("post-solve %s wait timed out", state)
                 logging.info("Challenge solved!")
@@ -483,7 +581,13 @@ class StealthEngine(Engine):
                 return await page.content(), None
 
             async def cookies():
-                return _to_client_cookies(await ctx.context.cookies())
+                # Scoped to the page, not the whole context. A context outlives
+                # the request when it is a session, so an unscoped read hands
+                # back every host the session has ever visited, and clients add
+                # returned cookies by name with no domain check. The Chrome
+                # engine reports the active document's cookies only, which is
+                # what this matches.
+                return _to_client_cookies(await ctx.context.cookies(page.url))
 
             async def headers():
                 # Already tracked for PDF detection, so this costs nothing extra
@@ -492,6 +596,9 @@ class StealthEngine(Engine):
                 if not config.response_headers() or main_response is None:
                     return {}
                 try:
+                    # Playwright's headers are already lower-cased and joined on
+                    # ", " for repeats, which is the shape Chrome's CDP map has,
+                    # so both engines hand back the same keys for one page.
                     return dict(main_response.headers)
                 except Exception:
                     logging.debug("could not read the response headers", exc_info=True)
@@ -519,7 +626,8 @@ class StealthEngine(Engine):
                         logging.debug("unroute failed", exc_info=True)
             if click is not None:
                 try:
-                    await click[1].__aexit__(None, None, None)
+                    if click[1] is not None:
+                        await click[1].__aexit__(None, None, None)
                 except Exception:
                     logging.debug("click solver teardown failed", exc_info=True)
                 try:
@@ -573,38 +681,29 @@ class StealthEngine(Engine):
                             str(e).split("\nCall log:")[0].strip())
         return None
 
-    async def _wait_until_cleared(self, solver, page, captcha_type, deadline) -> bool:
+    async def _wait_until_cleared(self, page, deadline) -> bool:
         """Wait for the Cloudflare challenge to clear, up to ``deadline``.
 
         Non-interactive interstitials solve themselves after a few seconds of JS,
         so for those this just polls for the challenge to disappear. An interactive
         Turnstile needs a click, so its checkbox is clicked and re-clicked while it
-        stays unsolved. A ``solver`` is passed only by the paid escalation, which
-        nudges playwright-captcha instead.
+        stays unsolved. The paid escalation does not come through here: it runs
+        playwright-captcha on its own throwaway page.
         """
         loop = asyncio.get_running_loop()
-        is_turnstile = captcha_type == CaptchaType.CLOUDFLARE_TURNSTILE
         last_click = 0.0
         while True:
-            kind = (await self._detect_settled(page))[0]
+            # Both readings, every pass. A checkbox Cloudflare injects after the
+            # first look used to go unclicked for the whole wait, because whether
+            # there was one to click was decided once, before this loop began.
+            kind, has_widget = await self._detect_settled(page)
             if kind == "denied":
-                raise Exception('Cloudflare has blocked this request. '
-                                'Probably your IP is banned for this site, check in your web browser.')
+                raise Exception(pipeline.BLOCKED_MESSAGE)
             if kind == "challenge":
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
                     logging.debug("challenge still present (title=%r, url=%s)",
                                   await page.title(), page.url)
-                if solver is not None:
-                    try:
-                        await solver.solve_captcha(
-                            captcha_container=page,
-                            captcha_type=captcha_type,
-                            wait_checkbox_attempts=1,
-                            wait_checkbox_delay=0.5,
-                        )
-                    except Exception as e:
-                        logging.debug("click-solve nudge: %s", e)
-                elif is_turnstile:
+                if has_widget:
                     token = await self._turnstile_token(page)
                     # A standalone Turnstile widget stays in the DOM after solving,
                     # so _detect keeps seeing it and only the filled token says it
@@ -643,11 +742,17 @@ class StealthEngine(Engine):
         the token input but nothing else. Uses the narrow INTERSTITIAL_SELECTORS
         rather than the full challenge list, which carries markers an embedded
         widget shares and shapes an ordinary page can match by accident.
+
+        Read past a navigation, because this is asked exactly when the token has
+        just filled, which is the moment an interstitial submits it and leaves.
         """
-        for sel in INTERSTITIAL_SELECTORS:
-            if await page.query_selector(sel):
-                return True
-        return False
+        async def read():
+            for sel in INTERSTITIAL_SELECTORS:
+                if await page.query_selector(sel):
+                    return True
+            return False
+
+        return await self._past_navigation(read)
 
     async def _click_turnstile(self, page) -> bool:
         """Click the Turnstile checkbox, without touching main-world JS.
@@ -770,20 +875,24 @@ class StealthEngine(Engine):
             await solver.solve_captcha(captcha_container=page, captcha_type=captcha_type)
 
     async def _detect_settled(self, page) -> Tuple[str, bool]:
-        """``_detect``, retried once when the page moves under it.
+        """``_detect``, retried once when the page moves under it."""
+        return await self._past_navigation(lambda: self._detect(page))
+
+    async def _past_navigation(self, read):
+        """Run a page read, looking again once if the page moved under it.
 
         A challenge navigates to the real page the moment it clears, and any
-        title/selector read in flight then dies with "Execution context was
+        title or selector read in flight then dies with "Execution context was
         destroyed". That is the challenge succeeding, not the request failing, so
         look again once the new document is in place before giving up.
         """
         for attempt in (0, 1):
             try:
-                return await self._detect(page)
+                return await read()
             except Exception as e:
                 if attempt:
                     raise
-                logging.debug("detection raced a navigation, retrying: %s", e)
+                logging.debug("a page read raced a navigation, retrying: %s", e)
                 await asyncio.sleep(0.5)
 
     async def _detect(self, page) -> Tuple[str, bool]:
@@ -797,7 +906,7 @@ class StealthEngine(Engine):
         found, is_turnstile, _reason = await pipeline.run_async({
             pipeline.Look.TITLE: lambda _arg: page.title(),
             pipeline.Look.SELECTOR: lambda selector: _present(page, selector),
-        }, turnstile_is_a_challenge=True)
+        }, turnstile_is_a_challenge=self.presses_checkbox_unaided)
         if found is pipeline.Verdict.DENIED:
             return "denied", False
         return ("challenge" if found is pipeline.Verdict.CHALLENGE else "none"), is_turnstile

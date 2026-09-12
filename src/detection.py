@@ -37,6 +37,10 @@ CHALLENGE_SELECTORS = [
     'div.vc div.text-box h2'
 ]
 
+# Read as a list by the Chrome engine (joined into one CSS selector) and by
+# entry on the stealth engine, whose locator and its ancestor walk take a
+# single selector. A second entry here therefore needs the stealth reads
+# updated with it, or the two engines look at different things.
 TURNSTILE_SELECTORS = [
     "input[name='cf-turnstile-response']"
 ]
@@ -67,15 +71,24 @@ INTERSTITIAL_SELECTORS = [
 # CHALLENGE_SELECTORS for pre-solve browser detection, where over-matching only
 # costs a redundant solve attempt on an already-clear page). The challenge-form /
 # challenge-stage markers keep coverage for interstitials whose title is
-# localized (e.g. "Vent litt ...") and so slips past the title check;
-# turnstile-wrapper keeps coverage for an unsolved Turnstile gate.
+# localized (e.g. "Vent litt ...") and so slips past the title check.
+#
+# A bare "turnstile-wrapper" is deliberately NOT here either: a site's own login
+# widget carries it on a perfectly solved page, and every Cloudflare gate that
+# wraps a widget also carries one of the markers above, so it only cost a wasted
+# fallback and an uncacheable response.
+# Measured against seven live gates on 2026-09-12 (four hosts, English and
+# localized): only the first and the last of these fired. Cloudflare now
+# randomises the challenge element ids, so challenge-form and challenge-stage
+# are legacy coverage rather than what catches a gate today. The saved samples
+# still carry them, which is why html_samples/cloudflare_managed_2026_v1.html
+# was added: a fixture from before the id change cannot show that.
 CHALLENGE_HTML_MARKERS = (
     'window._cf_chl_opt',
     'cf-challenge-running',
     'id="challenge-form"',
     'id="challenge-stage"',
     'id="challenge-error',
-    'turnstile-wrapper',
 )
 
 

@@ -1,10 +1,10 @@
 import logging
-import os
 import platform
 import re
 import sys
 import threading
 import time
+from collections import OrderedDict
 from urllib.parse import urlparse
 
 # Only these two schemes may reach a browser, matched on the literal prefix so
@@ -14,6 +14,7 @@ _HTTP_URL = re.compile(r'^https?://', re.IGNORECASE)
 import config
 import detection
 import geo
+import redact
 import utils
 from dtos import (STATUS_ERROR, STATUS_OK, ChallengeResolutionResultT,
                   ChallengeResolutionT, HealthResponse, IndexResponse,
@@ -33,7 +34,7 @@ def _quit_driver(driver) -> None:
 SESSIONS_STORAGE = SessionStore(build=utils.get_webdriver, teardown=_quit_driver)
 
 # Chrome (Selenium + undetected_chromedriver) is the default engine and owns its
-# own SessionsStorage. The stealth engine (Camoufox + playwright-captcha) is
+# own session store. The stealth engine (Camoufox + playwright-captcha) is
 # loaded lazily so the service still runs on a Chrome-only image or when its
 # heavier dependencies aren't installed.
 CHROME_ENGINE = ChromeEngine(SESSIONS_STORAGE)
@@ -92,7 +93,7 @@ def health_endpoint() -> HealthResponse:
 
 def controller_v1_endpoint(req: V1RequestBase) -> V1ResponseBase:
     start_ts = int(time.time() * 1000)
-    logging.info(f"Incoming request => POST /v1 body: {utils.object_to_dict(req)}")
+    logging.info(f"Incoming request => POST /v1 body: {redact.body(utils.object_to_dict(req))}")
     res: V1ResponseBase
     try:
         res = _controller_v1_handler(req)
@@ -106,7 +107,7 @@ def controller_v1_endpoint(req: V1RequestBase) -> V1ResponseBase:
     res.startTimestamp = start_ts
     res.endTimestamp = int(time.time() * 1000)
     res.version = utils.get_flaresolverr_version()
-    logging.debug(f"Response => POST /v1 body: {utils.object_to_dict(res)}")
+    logging.debug(f"Response => POST /v1 body: {redact.body(utils.object_to_dict(res))}")
     logging.info(f"Response in {(res.endTimestamp - res.startTimestamp) / 1000} s")
     return res
 
@@ -188,7 +189,23 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
 def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
     logging.debug("Creating new session...")
 
-    engine = _validate_engine(req.engine) or config.default_engine().lower()
+    forced = _validate_engine(req.engine)
+    # 'auto' is not an engine, it is the absence of one, so it takes the default
+    # rather than falling through to Chrome.
+    engine = forced if forced in ('chrome', 'stealth') else config.default_engine().lower()
+
+    if req.session:
+        # Idempotent across both pools, not just the one this call would use: a
+        # fallback can leave the id live in the other one, and creating it again
+        # here opened a second browser under the same id and reported it as new.
+        for name in _available_engines():
+            if _pool_has(name, req.session):
+                return V1ResponseBase({
+                    "status": STATUS_OK,
+                    "message": "Session already exists.",
+                    "session": req.session
+                })
+
     if engine == 'stealth':
         if STEALTH_ENGINE is None:
             raise Exception("Stealth engine is not available (STEALTH_ENGINE disabled or dependencies missing).")
@@ -248,7 +265,13 @@ _MIN_ENGINE_SECONDS = 5.0
 
 # Per-domain memory of which engine last cleared a host, so a host that only the
 # stealth engine can solve skips the failing Chrome attempt on later requests.
-_DOMAIN_ENGINE = {}
+#
+# Bounded, because the key is a host the client asked for: a broad workload would
+# otherwise grow this for the life of the process, the same reason the metrics
+# exporter caps its domain labels. Past the cap the oldest host is forgotten,
+# which costs that host one routing decision, not correctness.
+_DOMAIN_ENGINE = OrderedDict()
+_MAX_REMEMBERED_HOSTS = 500
 _DOMAIN_LOCK = threading.Lock()
 
 
@@ -313,19 +336,27 @@ def _validate_max_timeout(req: V1RequestBase) -> None:
     a number is refused, and it says so instead of raising ValueError from inside
     the budget arithmetic.
     """
-    if req.maxTimeout is None:
-        req.maxTimeout = 60000
-        return
-    if isinstance(req.maxTimeout, bool):
+    asked = req.maxTimeout is not None
+    if not asked:
+        value = 60000
+    elif isinstance(req.maxTimeout, bool):
         raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
-    try:
-        value = int(req.maxTimeout)
-    except (TypeError, ValueError):
-        raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
-    if value < 1:
-        req.maxTimeout = 60000
-        return
+    else:
+        try:
+            value = int(req.maxTimeout)
+        except (TypeError, ValueError):
+            raise Exception("Request parameter 'maxTimeout' must be a number of milliseconds.")
+        if value < 1:
+            asked = False
+            value = 60000
     ceiling = config.max_timeout_ms()
+    if not asked:
+        # The default is a budget too, so a lowered ceiling has to bound it. The
+        # caller asked for nothing, so there is nothing to warn about.
+        if 0 < ceiling < value:
+            value = ceiling
+        req.maxTimeout = value
+        return
     if 0 < ceiling < value:
         logging.warning("Request parameter 'maxTimeout' of %dms is above the %dms ceiling and was "
                         "clamped. Raise MAX_TIMEOUT_MS if a longer budget is intended.", value, ceiling)
@@ -356,7 +387,10 @@ def _host_of(req: V1RequestBase):
 def _remember_engine(host, name: str):
     if host:
         with _DOMAIN_LOCK:
+            _DOMAIN_ENGINE.pop(host, None)
             _DOMAIN_ENGINE[host] = name
+            while len(_DOMAIN_ENGINE) > _MAX_REMEMBERED_HOSTS:
+                _DOMAIN_ENGINE.popitem(last=False)
 
 
 def _recalled_engine(host):
@@ -366,13 +400,13 @@ def _recalled_engine(host):
         return _DOMAIN_ENGINE.get(host)
 
 
-def _engine_plan(req: V1RequestBase):
-    """Return (ordered_engines, can_fallback).
+def _engine_plan(req: V1RequestBase) -> list:
+    """The engines to try, in order.
 
-    An explicit ``engine`` forces a single engine (no fallback). Otherwise the
-    primary is chosen from per-domain memory, then the engine already holding the
-    request's session, then DEFAULT_ENGINE; the other engine is appended as a
-    fallback when ENGINE_FALLBACK is on and both engines are available.
+    An explicit ``engine`` forces a single engine. Otherwise the primary is the
+    engine already holding the request's session, then per-domain memory, then
+    DEFAULT_ENGINE; the other engine is appended as a fallback when
+    ENGINE_FALLBACK is on and both engines are available.
     """
     available = _available_engines()
 
@@ -380,34 +414,40 @@ def _engine_plan(req: V1RequestBase):
     if forced in ('chrome', 'stealth'):
         if forced not in available:
             raise Exception(f"Requested engine '{forced}' is not available.")
-        return [available[forced]], False
+        return [available[forced]]
 
     host = _host_of(req)
     # The engine holding the session wins: a session is a specific browser, and
     # sending the request elsewhere would silently open a second one under the
     # same id (and solve without the cookies the client warmed up).
     primary = None
-    if req.session:
-        for name in available:
-            if _pool_has(name, req.session):
-                primary = name
-                break
+    holders = [name for name in available if req.session and _pool_has(name, req.session)]
+    if len(holders) == 1:
+        primary = holders[0]
+    elif holders:
+        # A fallback leaves the same id live in both pools, and then "the engine
+        # holding it" names both. Per-host memory decides between them, as it
+        # would for a request with no session at all; without this the order the
+        # pools happen to be listed in did, so the host that only one engine can
+        # clear went back to the other one on every later request.
+        recalled = _recalled_engine(host)
+        primary = recalled if recalled in holders else holders[0]
     if primary is None:
         primary = _recalled_engine(host)
         if primary not in available:
             primary = None
     if primary is None:
+        # Chrome is always available: the engine is built at import, while the
+        # stealth one is optional, so it is the fallback for any other value.
         default = config.default_engine()
         primary = default if default in available else 'chrome'
-        if primary not in available:
-            primary = next(iter(available))
 
     order = [available[primary]]
     if config.engine_fallback():
         for name, eng in available.items():
             if name != primary:
                 order.append(eng)
-    return order, len(order) > 1
+    return order
 
 
 def _looks_challenged(result: SolveResult) -> bool:
@@ -437,7 +477,7 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
     """
     timeout = int(req.maxTimeout) / 1000
     deadline = time.monotonic() + timeout
-    order, _can_fallback = _engine_plan(req)
+    order = _engine_plan(req)
     host = _host_of(req)
 
     last_error = None
@@ -454,23 +494,47 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
                          order[i - 1].name, engine.name, remaining)
             break
         is_last = i == len(order) - 1
+        if req.tabs_till_verify is not None and engine.presses_checkbox_unaided:
+            # Said out loud rather than dropped: the caller counted tab stops
+            # for an engine that does not walk the tab order, and it reaches the
+            # checkbox anyway, so the request is answered rather than refused.
+            logging.info("Engine '%s' reaches a Turnstile checkbox on its own; "
+                         "the tabs_till_verify count is not needed", engine.name)
         share = remaining if is_last else remaining / (len(order) - i)
         try:
             result = engine.solve(req, method, share)
         except Exception as e:
             last_error = e
             if is_last:
+                if last_result is not None:
+                    # An earlier engine did return a page, it just looked
+                    # challenged. Raising here threw it away and answered with
+                    # this engine's error, so adding a fallback engine made the
+                    # response worse than having none.
+                    logging.info("Engine '%s' failed (%s); returning the page the previous "
+                                 "engine did produce", engine.name, e)
+                    break
                 raise
             logging.warning("Engine '%s' failed (%s); falling back to '%s'...",
                             engine.name, e, order[i + 1].name)
             continue
 
-        if not is_last and _looks_challenged(result):
+        challenged = _looks_challenged(result)
+        if not is_last and challenged:
             last_error = Exception(f"Engine '{engine.name}' returned an unsolved challenge page")
             last_result = result
             logging.info("Engine '%s' returned an unsolved challenge page; falling back to '%s'...",
                          engine.name, order[i + 1].name)
             continue
+
+        if challenged:
+            # The last engine, with nothing left to fall back to. The page goes
+            # back to the caller, but it is not a clearance, so the memory must
+            # not learn this engine for the host: doing so sent every later
+            # request to the engine that failed.
+            logging.info("Engine '%s' returned a page that still looks challenged; returning it",
+                         engine.name)
+            return _to_challenge_resolution(result)
 
         _remember_engine(host, engine.name)
         logging.info("Solved %s with engine '%s'", host or req.url, engine.name)

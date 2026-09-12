@@ -48,8 +48,12 @@ def _solver_response(response: str, content_type: str = None) -> V1ResponseBase:
 
 class HtmlResponseShapeTest(unittest.TestCase):
 
-    def test_html_solve_omits_content_type(self):
-        self.assertNotIn('contentType', _serialized(SolveResult(response="<html/>")))
+    def test_an_html_solve_emits_only_the_fields_it_has_a_value_for(self):
+        # The whole key set, not one absent key: an optional field emitted as
+        # null is the shape FlareSolverr's clients do not expect, and checking
+        # them one at a time leaves the next one free to appear.
+        self.assertEqual(set(_serialized(SolveResult(response="<html/>"))),
+                         {'url', 'status', 'cookies', 'userAgent', 'turnstile_token', 'response'})
 
 
 class PdfResponseShapeTest(unittest.TestCase):
@@ -65,20 +69,20 @@ class PassthroughBodyTest(unittest.TestCase):
         encoded = base64.b64encode(PDF_BYTES).decode("ascii")
         with patch.object(flaresolverr_service, 'controller_v1_endpoint',
                           return_value=_solver_response(encoded, "application/pdf")):
-            _status, body, _content_type, _solution = passthrough._solve("https://example.tld/doc")
+            _status, body, _content_type, _solution = passthrough._solve("https://example.tld/doc", "example.tld")
         self.assertEqual(body, PDF_BYTES)
 
     def test_pdf_solution_is_served_under_its_content_type(self):
         encoded = base64.b64encode(PDF_BYTES).decode("ascii")
         with patch.object(flaresolverr_service, 'controller_v1_endpoint',
                           return_value=_solver_response(encoded, "application/pdf")):
-            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/doc")
+            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/doc", "example.tld")
         self.assertEqual(content_type, "application/pdf")
 
     def test_html_solution_stays_html(self):
         with patch.object(flaresolverr_service, 'controller_v1_endpoint',
                           return_value=_solver_response("<html/>")):
-            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/page")
+            _status, _body, content_type, _solution = passthrough._solve("https://example.tld/page", "example.tld")
         self.assertEqual(content_type, passthrough._HTML_CONTENT_TYPE)
 
 
@@ -101,17 +105,25 @@ class CookieShapeTest(unittest.TestCase):
     def test_client_cookie_drops_keys_playwright_rejects(self):
         self.assertNotIn('expiry', _to_playwright_cookies([SELENIUM_COOKIE], PAGE_URL)[0])
 
-    def test_a_cookie_with_no_domain_is_anchored_to_the_page(self):
+    def test_a_cookie_with_no_domain_takes_the_page_host(self):
         # Playwright refuses the whole batch without a url or domain/path pair,
         # so this shape (the one the README documents) used to fail the request.
-        # Selenium defaults it to the page being loaded; this matches that.
+        # Selenium defaults it to the host being loaded; this matches that.
         translated = _to_playwright_cookies([{"name": "a", "value": "1"}], PAGE_URL)[0]
-        self.assertEqual(translated['url'], PAGE_URL)
+        self.assertEqual(translated['domain'], 'example.tld')
 
-    def test_an_anchored_cookie_invents_no_domain(self):
-        # url and domain are alternatives; sending both is what Playwright rejects.
+    def test_a_cookie_with_no_path_applies_to_the_whole_host(self):
+        # A url would scope it to that URL's directory instead, so a cookie sent
+        # with a request for /a/b was not sent back for /c.
         translated = _to_playwright_cookies([{"name": "a", "value": "1"}], PAGE_URL)[0]
-        self.assertNotIn('domain', translated)
+        self.assertEqual(translated['path'], '/')
+
+    def test_a_cookie_with_a_path_and_no_domain_is_not_given_a_url(self):
+        # url and path are alternatives; sending both is what Playwright rejects,
+        # and it rejects the whole batch with it.
+        translated = _to_playwright_cookies([{"name": "a", "value": "1", "path": "/dl"}],
+                                            PAGE_URL)[0]
+        self.assertNotIn('url', translated)
 
     def test_a_domain_without_a_path_gets_the_default_one(self):
         translated = _to_playwright_cookies([{"name": "a", "value": "1",

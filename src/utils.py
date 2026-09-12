@@ -13,6 +13,7 @@ import undetected_chromedriver as uc
 
 import config
 import geo
+import redact
 
 FLARESOLVERR_VERSION = None
 PLATFORM_VERSION = None
@@ -123,11 +124,19 @@ def create_proxy_extension(proxy: dict) -> str:
 
     proxy_extension_dir = tempfile.mkdtemp()
 
-    with open(os.path.join(proxy_extension_dir, "manifest.json"), "w") as f:
-        f.write(manifest_json)
+    # Cleans up after itself: background.js holds the proxy username and
+    # password in plaintext, and a failure between mkdtemp and the caller taking
+    # ownership left the directory (and on the second write, the credentials)
+    # behind with nobody holding the path.
+    try:
+        with open(os.path.join(proxy_extension_dir, "manifest.json"), "w") as f:
+            f.write(manifest_json)
 
-    with open(os.path.join(proxy_extension_dir, "background.js"), "w") as f:
-        f.write(background_js)
+        with open(os.path.join(proxy_extension_dir, "background.js"), "w") as f:
+            f.write(background_js)
+    except Exception:
+        shutil.rmtree(proxy_extension_dir, ignore_errors=True)
+        raise
 
     return proxy_extension_dir
 
@@ -165,8 +174,13 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # change language depending on which engine answered it. Sent as the
     # "tag, base" pair a desktop browser sends, since --accept-lang is passed
     # through verbatim and a single-element navigator.languages stands out.
-    options.add_argument('--accept-lang=%s' % geo.accept_language(
-        geo.browser_language(geo.proxy_to_config(proxy))))
+    language = geo.browser_language(geo.proxy_to_config(proxy))
+    options.add_argument('--accept-lang=%s' % geo.accept_language(language))
+    # Added after the pair, and deliberately: undetected_chromedriver derives
+    # Chrome's --lang from the last argument whose name contains "lang", and
+    # would otherwise take the header pair, launching the browser with
+    # --lang=de-DE, de. The UI language is one tag.
+    options.add_argument('--lang=%s' % language)
 
     if config.response_headers():
         # The only way Selenium can see response headers: ask the browser to log
@@ -182,61 +196,65 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     proxy_extension_dir = None
     if proxy and all(key in proxy for key in ['url', 'username', 'password']):
         proxy_extension_dir = create_proxy_extension(proxy)
-        disabled_features.append("DisableLoadExtensionCommandLineSwitch")
-        options.add_argument("--load-extension=%s" % os.path.abspath(proxy_extension_dir))
     elif proxy and 'url' in proxy:
         proxy_url = proxy['url']
-        logging.debug("Using webdriver proxy: %s", proxy_url)
+        logging.debug("Using webdriver proxy: %s", redact.proxy_url(proxy_url))
         options.add_argument('--proxy-server=%s' % proxy_url)
 
-    options.add_argument('--disable-features=%s' % ','.join(disabled_features))
-
-    # note: headless mode is detected (headless = True)
-    # we launch the browser in head-full mode with the window hidden
-    windows_headless = False
-    if get_config_headless():
-        if os.name == 'nt':
-            windows_headless = True
-        else:
-            start_xvfb_display()
-    # For normal headless mode:
-    # options.add_argument('--headless')
-
-    # if we are inside the Docker container, we avoid downloading the driver
-    driver_exe_path = None
-    version_main = None
-    if os.path.exists("/app/chromedriver"):
-        # running inside Docker
-        driver_exe_path = "/app/chromedriver"
-    else:
-        version_main = get_chrome_major_version()
-        if PATCHED_DRIVER_PATH is not None:
-            driver_exe_path = PATCHED_DRIVER_PATH
-
-    # detect chrome path
-    browser_executable_path = get_chrome_exe_path()
-
-    # downloads and patches the chromedriver
-    # if we don't set driver_executable_path it downloads, patches, and deletes the driver each time
+    # Everything from here on is inside the try because the extension directory
+    # holds the proxy username and password in plaintext, and every step below
+    # can raise: finding Chrome, reading its version and starting the display
+    # all failed with the credentials still on disk. Chrome has read the
+    # extension by the time the constructor returns, so the cleanup is safe as
+    # soon as the launch settles either way.
     try:
-        driver = uc.Chrome(options=options, browser_executable_path=browser_executable_path,
-                           driver_executable_path=driver_exe_path, version_main=version_main,
-                           windows_headless=windows_headless, headless=get_config_headless())
-    except Exception as e:
-        logging.error("Error starting Chrome: %s" % e)
-        # No point in continuing if we cannot retrieve the driver
-        raise e
+        if proxy_extension_dir is not None:
+            disabled_features.append("DisableLoadExtensionCommandLineSwitch")
+            options.add_argument("--load-extension=%s" % os.path.abspath(proxy_extension_dir))
+
+        options.add_argument('--disable-features=%s' % ','.join(disabled_features))
+
+        # note: headless mode is detected (headless = True)
+        # we launch the browser in head-full mode with the window hidden
+        windows_headless = False
+        if get_config_headless():
+            if os.name == 'nt':
+                windows_headless = True
+            else:
+                start_xvfb_display()
+        # For normal headless mode:
+        # options.add_argument('--headless')
+
+        # if we are inside the Docker container, we avoid downloading the driver
+        driver_exe_path = None
+        version_main = None
+        if os.path.exists("/app/chromedriver"):
+            # running inside Docker
+            driver_exe_path = "/app/chromedriver"
+        else:
+            version_main = get_chrome_major_version()
+            if PATCHED_DRIVER_PATH is not None:
+                driver_exe_path = PATCHED_DRIVER_PATH
+
+        # detect chrome path
+        browser_executable_path = get_chrome_exe_path()
+
+        # downloads and patches the chromedriver
+        # if we don't set driver_executable_path it downloads, patches, and deletes the driver each time
+        try:
+            driver = uc.Chrome(options=options, browser_executable_path=browser_executable_path,
+                               driver_executable_path=driver_exe_path, version_main=version_main,
+                               windows_headless=windows_headless, headless=get_config_headless())
+        except Exception as e:
+            logging.error("Error starting Chrome: %s" % e)
+            # No point in continuing if we cannot retrieve the driver
+            raise e
     finally:
-        # In a finally because the directory holds the proxy username and
-        # password in plaintext: a launch that raised used to skip the cleanup
-        # below and leave them in the system temp directory for good. Chrome has
-        # already read the extension by the time the constructor returns.
         if proxy_extension_dir is not None:
             try:
                 shutil.rmtree(proxy_extension_dir)
             except Exception:
                 logging.debug("proxy extension cleanup failed", exc_info=True)
-            proxy_extension_dir = None
 
     # save the patched driver to avoid re-downloads
     if driver_exe_path is None:

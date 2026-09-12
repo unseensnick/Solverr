@@ -1,9 +1,15 @@
 """Chrome engine: Selenium + vendored undetected_chromedriver.
 
-This is FlareSolverr's original solving path, moved behind the Engine interface
-unchanged in behavior. It stays the default engine because it empirically clears
-the target sites best and already supports sessions, POST, cookie injection and
-screenshots.
+FlareSolverr's original solving path, behind the Engine interface. It stays the
+default engine because it empirically clears the hardest sites and already
+supports sessions, POST, cookie injection and screenshots.
+
+The clearing core below (`_evil_logic` and the Turnstile helpers) is still
+upstream's and still syncs from it. What wraps it is ours: the session handover
+and its lock, the browser identity, response headers, the shared spine calls,
+and the share of `maxTimeout` this engine gets. Those have diverged from
+upstream deliberately, and each divergence is recorded in
+docs/dev/upstream-sync.md.
 """
 import json
 import logging
@@ -46,27 +52,65 @@ _TURNSTILE_SELECTOR = ", ".join(TURNSTILE_SELECTORS)
 # it out on a page that turns out to have no widget at all.
 _WIDGET_RENDER_SECONDS = 5
 
+# What disableMedia blocks: images, stylesheets and fonts, which is what the
+# README promises and what the stealth engine blocks by resource type. Chrome
+# has no resource-type filter, so the same rule is spelled as URL patterns.
+_MEDIA_BLOCK_URLS = [
+    # Images
+    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp", "*.svg", "*.ico",
+    "*.PNG", "*.JPG", "*.JPEG", "*.GIF", "*.WEBP", "*.BMP", "*.SVG", "*.ICO",
+    "*.tiff", "*.tif", "*.jpe", "*.apng", "*.avif", "*.heic", "*.heif",
+    "*.TIFF", "*.TIF", "*.JPE", "*.APNG", "*.AVIF", "*.HEIC", "*.HEIF",
+    # Stylesheets
+    "*.css",
+    "*.CSS",
+    # Fonts
+    "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+    "*.WOFF", "*.WOFF2", "*.TTF", "*.OTF", "*.EOT"
+]
+
 class ChromeEngine(Engine):
     """Solve challenges with a real Chromium driven by undetected_chromedriver."""
 
     name = "chrome"
+    # A checkbox lives in a closed shadow root, so the only way in is the tab
+    # order, and only the caller knows how many stops away it is.
+    presses_checkbox_unaided = False
 
     def __init__(self, sessions):
         # Shared SessionStore; a Chrome session's payload is a live WebDriver.
         self._sessions = sessions
 
     def solve(self, req: V1RequestBase, method: str, timeout: float) -> SolveResult:
+        # The share starts here, not once the browser is up: launching one takes
+        # seconds, and they used to be spent outside the budget entirely.
+        started = time.monotonic()
         driver = None
         # get() hands the session over already marked in use, so nothing can quit
         # the browser under this request. Released in the finally below, which
         # runs in this thread and so survives func_timeout stopping the worker.
         in_use = None
+        # The session lock this request holds, released in the finally below.
+        locked = None
+        # The proxy this browser actually exits through. For a session that is
+        # the proxy it was built with, not the one on this request: the /v1
+        # contract ignores a request proxy when a session is named, so taking it
+        # from the request would pin the timezone to an exit the traffic never
+        # uses, and say a different country than the browser's own language.
+        browser_proxy = req.proxy
         try:
             if req.session:
                 session_id = req.session
                 ttl = timedelta(minutes=req.session_ttl_minutes) if req.session_ttl_minutes else None
                 session, fresh = self._sessions.get(session_id, ttl, req.proxy)
                 in_use = session
+                browser_proxy = session.proxy
+                # One request at a time on this browser. Waiting counts against
+                # the share, like the launch does, so a queue cannot push the
+                # request past the budget the caller asked for.
+                if not session.lock.acquire(timeout=budget.remaining_share(started, timeout)):
+                    raise Exception("Timed out waiting for session '%s' to be free." % session_id)
+                locked = session.lock
 
                 if fresh:
                     logging.debug(f"new session created to perform the request (session_id={session_id})")
@@ -78,13 +122,39 @@ class ChromeEngine(Engine):
             else:
                 driver = utils.get_webdriver(req.proxy)
                 logging.debug('New instance of webdriver has been created to perform the request')
-            _apply_timezone(driver, req.proxy)
-            return func_timeout(timeout, self._evil_logic, (req, driver, method, timeout))
+            left = budget.remaining_share(started, timeout)
+            if left > budget.SOLVE_MARGIN_SECONDS:
+                # Skipped when the launch has already spent the share: the zone
+                # comes from a lookup that is cold for a proxy nobody has
+                # resolved yet, and paying for it here would leave the solve the
+                # one-second floor and an instant timeout. A browser in the
+                # container's timezone still solves.
+                _apply_timezone(driver, browser_proxy)
+                left = budget.remaining_share(started, timeout)
+            else:
+                logging.debug("no budget left to set the browser timezone")
+            return func_timeout(left, self._evil_logic, (req, driver, method, left))
         except FunctionTimedOut:
+            # func_timeout stops the worker thread asynchronously, so the driver
+            # command it was in the middle of can still be running when we get
+            # here. Handing the session to the next request would put two
+            # requests on one browser, which is what the lock exists to stop, so
+            # the browser goes instead: the next request on this id builds a
+            # fresh one, on the same proxy. Sessionless drivers are quit below.
+            if req.session:
+                self._sessions.discard(req.session)
             raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
         except Exception as e:
             raise Exception('Error solving the challenge. ' + str(e).replace('\n', '\\n'))
         finally:
+            if driver is not None and req.session and config.response_headers():
+                # A session's browser keeps its network log between requests and
+                # only a read empties it. The read that reports the headers is
+                # skipped under returnOnlyCookies and never reached when a solve
+                # fails, so without this the log grows for the session's life.
+                _drain_performance_log(driver)
+            if locked is not None:
+                locked.release()
             if in_use is not None:
                 self._sessions.end_use(in_use)
             if not req.session and driver is not None:
@@ -102,27 +172,19 @@ class ChromeEngine(Engine):
         disable_media = utils.get_config_disable_media()
         if req.disableMedia is not None:
             disable_media = req.disableMedia
-        if disable_media:
-            block_urls = [
-                # Images
-                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp", "*.svg", "*.ico",
-                "*.PNG", "*.JPG", "*.JPEG", "*.GIF", "*.WEBP", "*.BMP", "*.SVG", "*.ICO",
-                "*.tiff", "*.tif", "*.jpe", "*.apng", "*.avif", "*.heic", "*.heif",
-                "*.TIFF", "*.TIF", "*.JPE", "*.APNG", "*.AVIF", "*.HEIC", "*.HEIF",
-                # Stylesheets
-                "*.css",
-                "*.CSS",
-                # Fonts
-                "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
-                "*.WOFF", "*.WOFF2", "*.TTF", "*.OTF", "*.EOT"
-            ]
-            try:
-                logging.debug("Network.setBlockedURLs: %s", block_urls)
-                driver.execute_cdp_cmd("Network.enable", {})
-                driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": block_urls})
-            except Exception:
-                # if CDP commands are not available or fail, ignore and continue
-                logging.debug("Network.setBlockedURLs failed or unsupported on this webdriver")
+        # Sent on every request, with an empty list when nothing is to be
+        # blocked: a session's driver keeps this CDP state, so a block set once
+        # went on blocking for every later request on that session, including
+        # ones that asked for media. The stealth engine drops its own routing at
+        # the end of each request for the same reason.
+        block_urls = _MEDIA_BLOCK_URLS if disable_media else []
+        try:
+            logging.debug("Network.setBlockedURLs: %s", block_urls)
+            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": block_urls})
+        except Exception:
+            # if CDP commands are not available or fail, ignore and continue
+            logging.debug("Network.setBlockedURLs failed or unsupported on this webdriver")
 
         # navigate to the page
         logging.debug(f"Navigating to... {req.url}")
@@ -151,6 +213,15 @@ class ChromeEngine(Engine):
         if method != "POST" and req.tabs_till_verify is not None:
             deadline = budget.solve_deadline(started, timeout)
             turnstile_token = _resolve_turnstile_captcha(driver, req.tabs_till_verify, deadline)
+        else:
+            # No count, so there is no way to press the checkbox, but a widget
+            # the page solved by itself still carries a token and the stealth
+            # engine reports it. POST is not excluded here the way pressing is:
+            # reading costs nothing and the stealth engine reads it either way,
+            # so excluding it would make the field mean two things again.
+            # Read-only, and without the grace period a late widget gets above:
+            # that wait is only worth paying when there is a count to press with.
+            turnstile_token = _turnstile_token_value(driver)
 
         # wait for the page
         if utils.get_config_log_html():
@@ -158,15 +229,17 @@ class ChromeEngine(Engine):
         html_element = driver.find_element(By.TAG_NAME, "html")
 
         # The verdict rule is shared with the stealth engine (pipeline.py); only
-        # the two looks below are Chrome's. turnstile_is_a_challenge is False
-        # here: without a tabs_till_verify count there is no way to reach the
-        # checkbox, so treating a bare widget as a challenge would spend the
-        # whole budget in a wait loop that cannot win.
+        # the two looks below are Chrome's. Whether a bare widget counts as a
+        # challenge is the same fact as whether this engine can press one, so it
+        # is read off the capability rather than written out a second time:
+        # without a tabs_till_verify count there is no way to reach the checkbox,
+        # and treating the widget as a challenge would spend the whole budget in
+        # a wait loop that cannot win.
         found, _is_turnstile, reason = pipeline.run({
             pipeline.Look.TITLE: lambda _arg: driver.title,
             pipeline.Look.SELECTOR: lambda selector: bool(
                 driver.find_elements(By.CSS_SELECTOR, selector)),
-        }, turnstile_is_a_challenge=False)
+        }, turnstile_is_a_challenge=self.presses_checkbox_unaided)
 
         if found is pipeline.Verdict.DENIED:
             raise Exception(pipeline.BLOCKED_MESSAGE)
@@ -225,7 +298,7 @@ class ChromeEngine(Engine):
             assembly.Read.URL: lambda: driver.current_url,
             assembly.Read.USER_AGENT: lambda: utils.get_user_agent(driver),
             assembly.Read.TOKEN: lambda: turnstile_token,
-            assembly.Read.HEADERS: lambda: _response_headers(driver),
+            assembly.Read.HEADERS: lambda: _response_headers(driver, driver.current_url),
             assembly.Read.WAIT: lambda: time.sleep(req.waitInSeconds),
             assembly.Read.BODY: lambda: (driver.page_source, None),
             assembly.Read.SCREENSHOT: lambda: driver.get_screenshot_as_png(),
@@ -233,26 +306,26 @@ class ChromeEngine(Engine):
         })
 
 
-def _response_headers(driver: WebDriver) -> dict:
-    """The final document's response headers, or {} when the feature is off.
+def _response_headers(driver: WebDriver, page_url: str) -> dict:
+    """The returned page's response headers, or {} when the feature is off.
 
     Selenium has no API for these, so the browser is asked at launch to log
-    network events (see get_webdriver) and the last main-document response is
-    picked out of that log here. Last rather than first: a challenge navigates
-    once it clears, so earlier entries describe pages the caller never asked for.
+    network events (see get_webdriver) and the document responses are picked out
+    of that log here. An iframe is a Document too, and a Cloudflare challenge
+    leaves one behind, so the entry has to be matched against the URL the caller
+    is getting back rather than taken as whichever came last. The stealth engine
+    reports its main-frame navigation response for the same reason.
 
-    The log is drained by reading it, which is what keeps a long-lived session
-    from accumulating one entry per request for as long as it lives.
+    Falls back to the last document entry when nothing matches, which is what a
+    redirect chain that ends on a URL the log never named looks like.
     """
     if not config.response_headers():
         return {}
-    try:
-        entries = driver.get_log('performance')
-    except Exception:
-        logging.debug("performance log unavailable, reporting no response headers", exc_info=True)
+    entries = _drain_performance_log(driver)
+    if entries is None:
         return {}
 
-    headers = {}
+    page, last = {}, {}
     for entry in entries:
         try:
             message = json.loads(entry['message'])['message']
@@ -261,10 +334,42 @@ def _response_headers(driver: WebDriver) -> dict:
             params = message.get('params') or {}
             if params.get('type') != 'Document':
                 continue
-            headers = (params.get('response') or {}).get('headers') or headers
+            response = params.get('response') or {}
+            headers = response.get('headers') or {}
+            if not headers:
+                continue
+            last = headers
+            if _same_document(response.get('url'), page_url):
+                page = headers
         except Exception:
             logging.debug("could not read a performance log entry", exc_info=True)
-    return headers
+    return page or last
+
+
+def _same_document(logged_url, page_url: str) -> bool:
+    """Whether a logged response URL is the document the caller is getting.
+
+    Compared without the fragment, which is never sent to the server and so
+    never appears on the response, but does appear on driver.current_url.
+    """
+    if not logged_url or not page_url:
+        return False
+    return logged_url.split('#', 1)[0] == page_url.split('#', 1)[0]
+
+
+def _drain_performance_log(driver: WebDriver):
+    """Read and so empty the browser's network log, or None when it has none.
+
+    Reading is what empties it, and a session's driver lives across requests, so
+    every request has to read it even when its headers are not going to be
+    reported: under returnOnlyCookies, or after a solve that failed, the entries
+    used to pile up in the browser for the life of the session.
+    """
+    try:
+        return driver.get_log('performance')
+    except Exception:
+        logging.debug("performance log unavailable, reporting no response headers", exc_info=True)
+        return None
 
 
 def _apply_timezone(driver: WebDriver, proxy: dict = None) -> None:

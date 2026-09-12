@@ -36,18 +36,26 @@ class VerdictTest(unittest.TestCase):
     def test_a_plain_page_is_nothing(self):
         self.assertEqual(decide()[0], Verdict.NONE)
 
-    def test_a_denied_title_is_denied(self):
-        self.assertEqual(decide(title=ACCESS_DENIED_TITLES[0])[0], Verdict.DENIED)
+    def test_every_denied_title_is_denied(self):
+        # Every entry, not the first: a list the rule stops walking part way
+        # through looks exactly like a list that is fully covered.
+        for title in ACCESS_DENIED_TITLES:
+            with self.subTest(title=title):
+                self.assertEqual(decide(title=title)[0], Verdict.DENIED)
 
     def test_a_denied_title_matches_on_a_prefix(self):
         # startswith, not equality: upstream's list is prefixes.
         self.assertEqual(decide(title=ACCESS_DENIED_TITLES[0] + " - example")[0], Verdict.DENIED)
 
-    def test_a_denied_selector_is_denied(self):
-        self.assertEqual(decide(present={ACCESS_DENIED_SELECTORS[0]})[0], Verdict.DENIED)
+    def test_every_denied_selector_is_denied(self):
+        for selector in ACCESS_DENIED_SELECTORS:
+            with self.subTest(selector=selector):
+                self.assertEqual(decide(present={selector})[0], Verdict.DENIED)
 
-    def test_a_challenge_title_is_a_challenge(self):
-        self.assertEqual(decide(title=CHALLENGE_TITLES[0])[0], Verdict.CHALLENGE)
+    def test_every_challenge_title_is_a_challenge(self):
+        for title in CHALLENGE_TITLES:
+            with self.subTest(title=title):
+                self.assertEqual(decide(title=title)[0], Verdict.CHALLENGE)
 
     def test_a_challenge_title_matches_regardless_of_case(self):
         self.assertEqual(decide(title=CHALLENGE_TITLES[0].upper())[0], Verdict.CHALLENGE)
@@ -56,8 +64,10 @@ class VerdictTest(unittest.TestCase):
         # Equality, not startswith: these are exact titles, unlike the denied list.
         self.assertEqual(decide(title=CHALLENGE_TITLES[0] + " more")[0], Verdict.NONE)
 
-    def test_a_challenge_selector_is_a_challenge(self):
-        self.assertEqual(decide(present={CHALLENGE_SELECTORS[0]})[0], Verdict.CHALLENGE)
+    def test_every_challenge_selector_is_a_challenge(self):
+        for selector in CHALLENGE_SELECTORS:
+            with self.subTest(selector=selector):
+                self.assertEqual(decide(present={selector})[0], Verdict.CHALLENGE)
 
     def test_denied_wins_over_a_challenge(self):
         found, _t, _r, _l = decide(title=ACCESS_DENIED_TITLES[0],
@@ -100,9 +110,11 @@ class ShortCircuitTest(unittest.TestCase):
         self.assertEqual(decide(present={ACCESS_DENIED_SELECTORS[0]})[3],
                          [ACCESS_DENIED_SELECTORS[0]])
 
-    def test_a_clean_page_looks_at_every_list_once(self):
-        looked = decide()[3]
-        self.assertEqual(len(looked), len(set(looked)), "a selector was tested twice")
+    def test_a_clean_page_looks_at_every_selector_once_in_order(self):
+        # The whole sequence: counting duplicates said nothing about a list the
+        # rule never reached, which is the way coverage goes missing here.
+        self.assertEqual(decide()[3], [*ACCESS_DENIED_SELECTORS, *TURNSTILE_SELECTORS,
+                                       *CHALLENGE_SELECTORS])
 
     def test_a_challenge_title_skips_the_challenge_selectors(self):
         looked = decide(title=CHALLENGE_TITLES[0])[3]

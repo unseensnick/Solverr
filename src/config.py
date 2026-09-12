@@ -33,13 +33,7 @@ def stealth_max_attempts() -> int:
     """Click attempts per click-solver nudge (default 1). The engine runs its own
     wait-and-retry loop bounded by the request's maxTimeout, so one attempt per
     nudge keeps each pass fast. Set STEALTH_MAX_ATTEMPTS to override."""
-    raw = os.environ.get('STEALTH_MAX_ATTEMPTS', '').strip()
-    if not raw:
-        return 1
-    try:
-        return int(raw)
-    except ValueError:
-        return 1
+    return _int_env('STEALTH_MAX_ATTEMPTS', 1)
 
 
 def stealth_start_timeout() -> float:
@@ -124,9 +118,39 @@ def browser_timezone() -> Optional[str]:
     'auto' and unset mean the same thing, deriving the zone from the egress IP
     so it agrees with the exit country. Pinning it to a zone costs no lookup, so
     an offline deployment sets this rather than an opt-out flag.
+
+    A zone the system's tzdata does not list is dropped with a warning and the
+    request falls back to 'auto', because an unchecked typo splits the engines:
+    Chrome's CDP override fails and `_apply_timezone` swallows it, leaving that
+    browser on the container's zone, while the stealth side hands the same
+    string to Camoufox.
     """
     raw = os.environ.get('BROWSER_TIMEZONE', '').strip()
-    return raw or None
+    if not raw or raw.lower() == 'auto':
+        return raw or None
+    return _known_zone(raw)
+
+
+# Warn once per bad value, like the language reader above: this is read on every
+# browser launch.
+_rejected_zones = set()
+
+
+def _known_zone(raw: str) -> Optional[str]:
+    """`raw` if the system's timezone table lists it, else None ('auto').
+
+    geo imports config, so the import stays inside the function. A host with no
+    tzdata has nothing to check against, and geo already warns about that on its
+    own, so the value is passed through unverified rather than dropped.
+    """
+    import geo
+    if geo.is_known_zone(raw):
+        return raw
+    if raw not in _rejected_zones:
+        _rejected_zones.add(raw)
+        logging.warning("BROWSER_TIMEZONE=%r is not a timezone this system knows; "
+                        "following the exit IP instead", raw)
+    return None
 
 
 def response_headers() -> bool:
@@ -148,6 +172,22 @@ def response_headers() -> bool:
     return _bool('RESPONSE_HEADERS', False)
 
 
+_warned_empty_proxy = False
+
+
+def _warn_empty_proxy() -> None:
+    """Say once that a set-but-blank PROXY_URL means no proxy.
+
+    It used to fail every request instead, which was at least loud. Now traffic
+    leaves on the server's own address, which is what the deployer was trying to
+    avoid by setting the variable at all.
+    """
+    global _warned_empty_proxy
+    _warned_empty_proxy = True
+    logging.warning("PROXY_URL is set but empty, so requests go out directly. "
+                    "Give it a proxy URL, or unset it to say so on purpose.")
+
+
 def env_proxy() -> Optional[dict]:
     """The configured proxy as a request-shaped dict, or None when unset.
 
@@ -161,6 +201,8 @@ def env_proxy() -> Optional[dict]:
     """
     url = os.environ.get('PROXY_URL')
     if not url:
+        if url is not None and not _warned_empty_proxy:
+            _warn_empty_proxy()
         return None
     username = os.environ.get('PROXY_USERNAME')
     password = os.environ.get('PROXY_PASSWORD')
@@ -194,12 +236,21 @@ def browser_wait_timeout() -> int:
 
 
 def session_ttl_minutes() -> int:
-    """Idle minutes before the reaper closes a session's browser (0 disables reaping)."""
+    """Idle minutes before the reaper closes a session's browser.
+
+    Zero or less disables idle reaping entirely (``SessionStore.reap_idle``
+    returns early), so abandoned browsers then live until the cap evicts them.
+    The reaper says which of the two it is at startup.
+    """
     return _int_env('SESSION_TTL_MINUTES', 30)
 
 
 def session_max() -> int:
-    """Max concurrent sessions per engine before the oldest-idle is evicted."""
+    """Max concurrent sessions per engine before the oldest-idle is evicted.
+
+    Zero or less disables the cap (``SessionStore.enforce_cap`` returns early)
+    rather than refusing every session, so the only bound left is the TTL.
+    """
     return _int_env('SESSION_MAX', 20)
 
 
@@ -279,6 +330,21 @@ def passthrough_allowed_hosts() -> list:
 def passthrough_cache_ttl() -> int:
     """Seconds to cache a solved 2xx body (0 disables caching)."""
     return _int_env('PASSTHROUGH_CACHE_TTL', 3600)
+
+
+def passthrough_cache_requires() -> str:
+    """A string a solved body must contain to earn the full cache TTL.
+
+    Empty by default, which caches every 2xx body for the full TTL. A site
+    answers a transient failure with its own error page, under HTTP 200 and with
+    its usual layout around it, so nothing in the response says not to keep it:
+    an hour of that is an indexer that looks broken while the site is fine.
+    Naming something every real page carries (a link prefix its result rows use,
+    a marker in its footer) gives the proxy a way to tell the two apart, and a
+    body without it is kept only briefly instead of not at all, so a burst of
+    identical requests still costs one solve.
+    """
+    return os.environ.get('PASSTHROUGH_CACHE_REQUIRES', '').strip()
 
 
 def passthrough_cache_max_bytes() -> int:

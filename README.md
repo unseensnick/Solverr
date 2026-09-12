@@ -120,12 +120,18 @@ Fallback triggers when an engine throws (blocked / timeout), or returns a page t
 
 A **session** keeps a browser alive between requests. The cleared `cf_clearance` cookie stays in that browser's memory, so follow-up requests to the same host skip the challenge and return in 1–3 s instead of re-solving. This is the main reliability and speed lever: solve once, reuse the cookie many times.
 
-Each engine keeps its own session pool under one shared session-id namespace; a session is bound to whichever engine created it (default Chrome). Create one with `sessions.create` and pass its `session` id on later requests.
+Each engine keeps its own session pool under one shared session-id namespace; a session is bound to whichever engine created it, `DEFAULT_ENGINE` unless the request names one. Create one with `sessions.create` and pass its `session` id on later requests.
+
+A session keeps the proxy it was created with. Its browser is rebuilt whenever its lifetime runs out, the idle cleanup closes it, the cap evicts it, or the other engine takes a request over, and every rebuild goes back out through that same proxy rather than through the server's own address. `sessions.destroy` forgets it.
+
+A session is one browser with one page, so two requests naming it take it in turn rather than at once. The wait counts against the second request's own `maxTimeout`, and a request that waits longer than that is told the session was busy instead of being answered with the other request's page.
 
 Clients often create a session and never destroy it (a mobile app can be killed before it could). To stop abandoned browsers leaking memory, Solverr runs a **background reaper** that:
 
-- closes any session idle longer than `SESSION_TTL_MINUTES` (default 30). Every request bumps the session's last-used time, so an in-use session is never reaped.
-- evicts the oldest-idle session once an engine exceeds `SESSION_MAX` (default 20).
+- closes any session idle longer than `SESSION_TTL_MINUTES` (default 30). Idle time runs from the end of the last request on the session, so a long solve doesn't leave it looking idle the moment it finishes, and a session with a request on it is never reaped. Set it to `0` to switch idle reaping off.
+- evicts the oldest-idle session once an engine exceeds `SESSION_MAX` (default 20). Set it to `0` to switch the cap off.
+
+Whichever of the two you switch off, the reaper's startup line says so.
 
 So `sessions.destroy` is good practice but optional: cleanup happens automatically.
 
@@ -158,7 +164,7 @@ Launches a browser that retains cookies until you `sessions.destroy` it (or the 
 | Parameter | Notes                                                                                                                                                                                             |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | session   | Optional. Session id to assign. A random UUID is used if omitted.                                                                                                                                |
-| engine    | Optional. `chrome` (default) or `stealth`. Binds the session to that engine.                                                                                                                     |
+| engine    | Optional. `chrome` or `stealth`; binds the session to that engine. Omitted or `auto`, it follows `DEFAULT_ENGINE`, so a Chrome session unless that names `stealth`. An id already live on either engine is reported back rather than opened a second time. |
 | proxy     | Optional. Eg `"proxy": {"url": "http://127.0.0.1:8888"}`. Schema required (`http://`, `socks4://`, `socks5://`). Auth supported: `{"url": "...", "username": "user", "password": "pass"}`. |
 
 ### `sessions.list`
@@ -185,14 +191,14 @@ Shuts a session's browser down and frees its resources.
 | engine              | Optional. `chrome`, `stealth`, or `auto` (default). See [Engines & fallback](#engines--fallback).                                                                |
 | session             | Optional. Reuse an existing browser instance. Without it, a temporary instance is created and destroyed after the request.                                      |
 | session_ttl_minutes | Optional. Recreate the session if it is older than this many minutes.                                                                                            |
-| maxTimeout          | Optional, default 60000. Max time to answer the request, in milliseconds. It covers the whole request, so a fallback to the other engine shares it rather than starting a fresh one. Clamped to `MAX_TIMEOUT_MS` (default 180000). |
+| maxTimeout          | Optional, default 60000. Max time to answer the request, in milliseconds. It covers the whole request, starting a browser included, so a fallback to the other engine shares it rather than starting a fresh one. Clamped to `MAX_TIMEOUT_MS` (default 180000), and so is the default when the field is omitted. |
 | cookies             | Optional. Cookies to set before loading. Eg `"cookies": [{"name": "a", "value": "1"}]`.                                                                          |
 | returnOnlyCookies   | Optional, default false. Return only cookies; drop response body and headers.                                                                                    |
 | returnScreenshot    | Optional, default false. Return a Base64 PNG of the final page in the `screenshot` field.                                                                        |
 | proxy               | Optional. Same shape as in `sessions.create`. Ignored when `session` is set (use a session proxy instead).                                                       |
 | waitInSeconds       | Optional. Extra seconds to wait after solving, before returning (lets dynamic content load).                                                                     |
-| disableMedia        | Optional, default false. Block images, CSS and fonts to speed up navigation.                                                                                     |
-| tabs_till_verify    | Optional (Chrome engine only). Number of `Tab` presses to reach a Turnstile checkbox; the resulting token is returned in `solution.turnstile_token`. Waits up to 5 seconds for a widget that renders after the page loads, so a page with no widget at all costs that long before the request continues without a token. Pressing stops in time to still return a page if the checkbox never yields one. The stealth engine detects Turnstile automatically and does not need this. |
+| disableMedia        | Optional, default false. Block images, CSS and fonts to speed up navigation. The same three on both engines, and only for the request that asks: a session is not left blocking media for the requests after it. |
+| tabs_till_verify    | Optional (Chrome engine only). Number of `Tab` presses to reach a Turnstile checkbox; the resulting token is returned in `solution.turnstile_token`. Waits up to 5 seconds for a widget that renders after the page loads, so a page with no widget at all costs that long before the request continues without a token. Pressing stops in time to still return a page if the checkbox never yields one. The stealth engine detects Turnstile automatically and does not need this, and says so in the log when a request sends a count it will not use. |
 
 > **Finding the right `tabs_till_verify`.** It is the number of `Tab` presses from the top of the document to the checkbox, so it depends on how many focusable elements the page puts before the widget. A widget with nothing focusable ahead of it is `1`. Find yours by sending the same request with `1`, `2`, `3` and so on: the value that comes back with a filled `solution.turnstile_token` is the one. Use a small `maxTimeout` while you search, because a wrong count spends the whole budget pressing before it gives up.
 
@@ -223,6 +229,8 @@ Example response (truncated):
 
 `solution.headers` is empty unless `RESPONSE_HEADERS=true`, which fills it on both engines or neither. FlareSolverr has never populated it, so the default keeps the payload identical to its.
 
+`solution.turnstile_token` is whatever token the page's own Turnstile widget holds when the page is read. The Camoufox engine waits for a widget to fill one, because it can press the checkbox itself; the Chrome engine reports one only if it is already there, unless the request sends `tabs_till_verify` and asks it to press.
+
 ### `request.post`
 
 Like `request.get`, plus `postData`.
@@ -235,11 +243,11 @@ Like `request.get`, plus `postData`.
 
 Some clients don't consume the solved HTML that `/v1` returns. Instead they take the `cf_clearance` cookie and **re-fetch the URL themselves** with their own HTTP client. Cloudflare fingerprints that second request (different TLS/JA4, HTTP/2 settings, headers) than the browser that solved the challenge, decides it doesn't match, and re-challenges, so the client fails even though the solve worked. Indexer managers that drive Cloudflare-protected sites are the common case.
 
-The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches.
+The passthrough removes the replay step. Point the client at Solverr's passthrough port instead of the site; Solverr solves in-process (reusing engine fallback, sessions, and per-host memory) and returns the solved body as a clean `200`. The client never sees a challenge, so it never re-fetches. Each allowed host gets its own warm session, so once a host has been cleared its next request reuses that browser and its cookies instead of starting one.
 
 A passthrough request can't pin an engine, so it uses `DEFAULT_ENGINE` like any other request. That matters for PDFs: they come back as the real file only when the stealth engine solved them (see the PDF note under [`request.get`](#requestget)), so set `DEFAULT_ENGINE=stealth` if the site serves them.
 
-**The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS` (anything else gets a `403`, so it is never a blind open proxy). A request to:
+**The target site is the first path segment**, and it must be listed in `PASSTHROUGH_ALLOWED_HOSTS`. Nothing outside that list is ever fetched, so it is never a blind open proxy. A request to:
 
 ```
 http://<solverr-host>:8888/example-site.tld/some/path/1/
@@ -247,7 +255,7 @@ http://<solverr-host>:8888/example-site.tld/some/path/1/
 
 is solved as `https://example-site.tld/some/path/1/`. Replace `<solverr-host>` with wherever Solverr actually runs: its Docker **service/container name** (e.g. `solverr`) if the client is on the same Docker network, otherwise Solverr's **host IP or hostname**. `8888` is `PASSTHROUGH_PORT`.
 
-A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites.
+A path whose first segment **isn't** an allow-listed host (the site's own root-relative links, like `/details/…` or `/download.php?id=1`, that a client follows for a details or next page) is routed to the **default mirror**, the first entry in `PASSTHROUGH_ALLOWED_HOSTS`. That's why downloads and pagination work; it also means the allow-list should be mirrors of one site, not unrelated sites. A mirror you forget to list is therefore served by the default one rather than refused: nothing distinguishes it from one of those root-relative links.
 
 Searches can run against any mirror the client picks, but those root-relative follow-ups always land on the default one, so list the mirror you want them served by first. If that mirror goes down, move a healthy one to the front: a client pointed at a working mirror would otherwise still search fine and fail every download.
 
@@ -285,7 +293,8 @@ Notes and limits:
 
 - **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
 - Encode the mirror as a **bare host** (`example-site.tld`), not `https://…`, because clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
-- Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
+- Static assets are answered `404` rather than solved: a path ending in a script, stylesheet, image, font or video extension is never worth a browser. The check reads the path only, so a page whose query string happens to end that way is still fetched.
+- Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking. A site answers a bad moment with its own error page under HTTP 200, which looks like any other page from here, so `PASSTHROUGH_CACHE_REQUIRES` lets you name something every real page carries; a body without it is kept for a minute instead of the full window.
 - The cache holds at most `PASSTHROUGH_CACHE_MAX_BYTES` in total. The TTL alone bounded how long a body was kept but not how much was kept, so a client walking many pages inside one TTL window could hold all of them at once.
 - It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
 
@@ -308,10 +317,10 @@ All settings are environment variables and all are optional.
 
 | Variable                  | Default | Description                                                              |
 | ------------------------- | ------- | ----------------------------------------------------------------------- |
-| `SESSION_TTL_MINUTES`     | `30`    | Idle minutes before the reaper closes a session's browser (`0` disables). |
-| `SESSION_MAX`             | `20`    | Max concurrent sessions per engine before oldest-idle eviction.          |
+| `SESSION_TTL_MINUTES`     | `30`    | Idle minutes before the reaper closes a session's browser (`0` or less disables idle reaping). |
+| `SESSION_MAX`             | `20`    | Max concurrent sessions per engine before oldest-idle eviction (`0` or less disables the cap). |
 | `REAPER_INTERVAL_SECONDS` | `60`    | How often the reaper scans.                                              |
-| `MAX_TIMEOUT_MS`          | `180000` | Ceiling on a request's `maxTimeout` (`0` lifts it). A larger request is clamped to this with a warning rather than refused, so existing callers keep working. |
+| `MAX_TIMEOUT_MS`          | `180000` | Ceiling on a request's `maxTimeout` (`0` lifts it). A larger request is clamped to this with a warning rather than refused, so existing callers keep working. Set below `60000` and it bounds a request that sends no `maxTimeout` at all too. |
 
 ### Proxy
 
@@ -339,11 +348,12 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | Variable                   | Default   | Description                                                                    |
 | -------------------------- | --------- | ----------------------------------------------------------------------------- |
 | `PASSTHROUGH_ENABLED`      | `false`   | Turn the passthrough listener on.                                              |
-| `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = refuse every request, so it's never a blind open proxy. |
+| `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = every request is answered `404`, so it's never a blind open proxy. |
 | `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
 | `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
+| `PASSTHROUGH_CACHE_REQUIRES` | (unset)   | A string an HTML body must contain to be cached for the full TTL, for example the link prefix your indexer's result rows use. A page without it is kept for 60 seconds, so one identical burst still costs one solve while a transient error page clears itself. Only HTML is judged this way: a PDF or an image keeps the full TTL. Unset caches every 2xx body for the full TTL. |
 | `PASSTHROUGH_CACHE_MAX_BYTES` | `268435456` | Ceiling on the total bytes the cache holds (`0` lifts it). Past the ceiling the soonest-to-expire entries are evicted first. A single body over a quarter of the ceiling is served but not cached. |
-| `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. |
+| `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. `0` or less falls back to 60000, the same budget the API gives a request that asks for none. |
 
 ### Browser, logging & server
 
@@ -359,7 +369,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `LOG_LEVEL`          | `info`    | `info` or `debug`.                                                             |
 | `LOG_FILE`           | none      | Also write logs to this file. Eg `/config/solverr.log`.                        |
 | `LOG_HTML`           | `false`   | Debug only: log all page HTML at `debug` level.                                |
-| `HOST` / `PORT`      | `0.0.0.0` / `8191` | Listening interface and port. Rarely changed under Docker.           |
+| `HOST` / `PORT`      | `0.0.0.0` / `8191` | Listening interface and port. `HOST` applies to the passthrough port too. Rarely changed under Docker. |
 | `TZ`                 | `UTC`     | Container timezone: log timestamps, and the browser's timezone when nothing resolves one. Eg `TZ=Europe/London`. |
 | `PROMETHEUS_ENABLED` | `false`   | Enable the Prometheus exporter (see below).                                    |
 | `PROMETHEUS_PORT`    | `8192`    | Exporter port (expose it if enabled).                                          |
@@ -375,10 +385,13 @@ Set something only when you need a specific result. There are three knobs and th
 | nothing | Timezone and language both from the exit IP | once per proxy |
 | `BROWSER_GEO=de-DE` | German, `Europe/Berlin` | no |
 | `LANG=de-DE` | German, timezone still from the exit IP | once per proxy |
-| `BROWSER_TIMEZONE=Europe/Berlin` | `Europe/Berlin`, language unchanged | no |
+| `BROWSER_TIMEZONE=Europe/Berlin` | `Europe/Berlin`, language still from the exit IP | once per proxy, for the language |
+| `BROWSER_TIMEZONE=Europe/Berlin` and `LANG=de-DE` | `Europe/Berlin`, German | no |
 | `BROWSER_TIMEZONE=auto` | Exit IP, ignoring any `BROWSER_GEO` | once per proxy |
 
-`LANG` and `BROWSER_TIMEZONE` each override `BROWSER_GEO` for their own half, so `BROWSER_GEO=en-US` with `BROWSER_TIMEZONE=America/Chicago` gives American English on Chicago time.
+`LANG` and `BROWSER_TIMEZONE` each override `BROWSER_GEO` for their own half, so `BROWSER_GEO=en-US` with `BROWSER_TIMEZONE=America/Chicago` gives American English on Chicago time. Pin both halves and nothing is looked up; pin one and the lookup that remains is the other half's alone, so it no longer resolves a zone that was never going to be used.
+
+"Per proxy" means per proxy account, not per proxy server: residential providers pick the exit country through the username, so two accounts on one endpoint each resolve their own country rather than sharing whichever was looked up first.
 
 **`BROWSER_GEO`** is the short way to match a proxy that always leaves from the same country. It costs no lookup at all, which also makes it the right choice for a deployment with no outbound access beyond its proxy. The timezone it picks is written to the log at startup, because a country with several zones gets its most populous one rather than a fact: `BROWSER_GEO=en-US` gives `America/New_York`. Set `BROWSER_TIMEZONE` if that isn't the one you want. A tag with no country in it, such as `fr`, sets the language only.
 
@@ -397,11 +410,11 @@ Anything that isn't a language tag is ignored with a warning in the log rather t
 
 Whatever the language ends up being, both engines report it as the two-entry `navigator.languages` a desktop browser sends: `de-DE` becomes `["de-DE", "de"]`.
 
-**`BROWSER_TIMEZONE`** takes any IANA zone. Pinning it costs no lookup, so it is also how an air-gapped deployment skips the exit-IP check entirely.
+**`BROWSER_TIMEZONE`** takes any IANA zone the container's own timezone data lists. Pinning it costs no timezone lookup, but the language still comes from the exit IP, so an air-gapped deployment sets `LANG` as well, or uses `BROWSER_GEO`, to skip the check entirely. A zone that isn't in that data (`Europe/Stockholmm`) is ignored with a warning naming it, and the timezone falls back to `auto`, because passing a typo on would put the two engines in different timezones.
 
 Two things worth knowing. Forcing a language a country doesn't speak, or a timezone it isn't in, is a mismatch a site can see, so change one only if you know why. And some countries share a timezone definition with a neighbour: Norway reports `Europe/Berlin` and the Netherlands `Europe/Brussels`, which is correct rather than a bug, since those are the same zone with the same offset and the same daylight-saving rules.
 
-If the exit IP can't be reached, Solverr falls back to the container's `TZ` for the timezone and `en-US` for the language, logs a warning, and carries on; it does not fail the request. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
+If the exit IP can't be reached, Solverr falls back to the container's `TZ` for the timezone and `en-US` for the language, logs a warning, and carries on; it does not fail the request. That fallback is kept for a minute and then looked up again, so a moment without network doesn't hold the wrong country in place for the rest of the cache window. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
 
 ## Proxy & reliability
 

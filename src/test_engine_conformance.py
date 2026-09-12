@@ -16,6 +16,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+import pipeline
 from detection import (ACCESS_DENIED_SELECTORS, ACCESS_DENIED_TITLES,
                        CHALLENGE_SELECTORS, CHALLENGE_TITLES, TURNSTILE_SELECTORS)
 from engine_fakes import HARNESSES, World
@@ -61,11 +62,13 @@ class EngineConformanceTest(unittest.TestCase):
             with self.subTest(engine=name):
                 self.assertEqual(result.response, world.html)
 
-    def test_an_ordinary_solve_reports_an_empty_header_map(self):
-        # Neither engine reports real headers yet, and both say so the same way.
-        for name, result, _ in self.each():
-            with self.subTest(engine=name):
-                self.assertEqual(result.headers, {})
+    def test_the_reported_url_is_the_page_that_answered(self):
+        # Not the URL the caller asked for: a challenge redirects, and a client
+        # that follows solution.url has to reach what was actually returned.
+        world = World(final_url="https://example-site.tld/after-redirect")
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                self.assertEqual(harness.solve(world).url, world.final_url)
 
     def test_an_ordinary_solve_reports_200(self):
         for name, result, _ in self.each():
@@ -111,6 +114,27 @@ class EngineConformanceTest(unittest.TestCase):
                 early = [c for c in result.cookies if c["name"] == "early"][0]
                 self.assertEqual(early["expiry"], 1893456000)
 
+    def test_both_engines_report_a_token_the_page_already_carries(self):
+        # A widget the site solved by itself, with no count to press it: the
+        # token means the same thing whichever engine answered.
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                # One world per engine: a world records how often it was looked
+                # at, and the second engine would start where the first stopped.
+                world = World(selectors=frozenset(TURNSTILE_SELECTORS), challenged_for=1,
+                              turnstile_token="0.ALREADY-SOLVED")
+                self.assertEqual(harness.solve(world).turnstile_token, "0.ALREADY-SOLVED")
+
+    def test_both_engines_report_that_token_on_a_post_too(self):
+        # The method decides whether a checkbox can be pressed, not whether a
+        # token that is already there can be read.
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                world = World(selectors=frozenset(TURNSTILE_SELECTORS), challenged_for=1,
+                              turnstile_token="0.ALREADY-SOLVED")
+                result = harness.solve(world, method="POST", postData="a=1")
+                self.assertEqual(result.turnstile_token, "0.ALREADY-SOLVED")
+
     def test_a_returned_cookie_never_carries_the_playwright_key(self):
         for name, result, _ in self.each():
             with self.subTest(engine=name):
@@ -122,11 +146,51 @@ class EngineConformanceTest(unittest.TestCase):
                 late = [c for c in result.cookies if c["name"] == "late"][0]
                 self.assertNotIn("expiry", late)
 
+    def test_another_site_s_cookies_are_never_returned(self):
+        # A client adds returned cookies by name with no domain check, because
+        # the Chrome engine only ever reported the page's own. A session that
+        # has visited two sites must not hand one site's clearance to the other.
+        world = World(foreign_cookies=[("other_site_clearance", "1", None)])
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                result = harness.solve(world)
+                self.assertNotIn("other_site_clearance",
+                                 [c["name"] for c in result.cookies])
+
     def test_both_engines_agree_on_the_cookie_key_set(self):
-        seen = {}
-        for name, result, _ in self.each():
-            seen[name] = sorted({k for c in result.cookies for k in c})
-        self.assertEqual(len(set(map(tuple, seen.values()))), 1, seen)
+        seen = {name: sorted({k for c in result.cookies for k in c})
+                for name, result, _ in self.each()}
+        self.assertEqual(seen["chrome"], seen["stealth"])
+
+
+class DisableMediaConformanceTest(unittest.TestCase):
+    """One request option, one meaning, whichever engine answers.
+
+    It used to mean "images, CSS and fonts" on Chrome and "images, video and
+    fonts" on the stealth engine, while the README promised the first on both.
+    """
+
+    def blocked(self, **fields):
+        for harness in HARNESSES:
+            world = World()
+            harness.solve(world, **fields)
+            yield harness.name, world.blocked_kinds
+
+    def test_both_engines_block_the_same_kinds(self):
+        got = dict(self.blocked(disableMedia=True))
+        self.assertEqual(got["chrome"], got["stealth"])
+
+    def test_the_kinds_are_the_ones_the_readme_promises(self):
+        for name, kinds in self.blocked(disableMedia=True):
+            with self.subTest(engine=name):
+                self.assertEqual(kinds, {"image", "stylesheet", "font"})
+
+    def test_a_request_that_does_not_ask_blocks_nothing(self):
+        # Chrome sessions keep this setting between requests, so "nothing" has
+        # to be stated rather than left to whatever the last request set.
+        for name, kinds in self.blocked(disableMedia=False):
+            with self.subTest(engine=name):
+                self.assertEqual(kinds, set())
 
 
 class ResponseHeaderConformanceTest(unittest.TestCase):
@@ -207,6 +271,22 @@ class NavigationConformanceTest(unittest.TestCase):
                 harness.solve(world, cookies=[{"name": "a", "value": "1"}])
                 self.assertEqual(len(world.cookies_set), 1)
 
+    def test_a_cookie_with_a_path_and_no_domain_is_accepted_by_both(self):
+        # Playwright takes a url or a domain/path pair, never a url with a path,
+        # so anchoring this one to the request URL failed the whole request.
+        for harness in HARNESSES:
+            with self.subTest(engine=harness.name):
+                world = World()
+                harness.solve(world, cookies=[{"name": "a", "value": "1", "path": "/dl"}])
+                self.assertEqual(len(world.cookies_set), 1)
+
+    def test_a_cookie_with_no_path_applies_to_the_whole_site(self):
+        # Selenium's default. Anchoring to the request URL scoped it to that
+        # URL's directory instead, so a cookie set from /a/b was not sent to /c.
+        world = World()
+        HARNESSES[1].solve(world, cookies=[{"name": "a", "value": "1"}])
+        self.assertEqual(world.cookies_set[0].get("path"), "/")
+
     def test_an_empty_cookie_list_does_not_force_one(self):
         for name, count in self.navigations(cookies=[]):
             with self.subTest(engine=name):
@@ -236,6 +316,13 @@ class DetectionConformanceTest(unittest.TestCase):
         for name, message in self.verdicts(title=ACCESS_DENIED_TITLES[0], challenged_for=9):
             with self.subTest(engine=name):
                 self.assertIn("Cloudflare has blocked this request", message)
+
+    def test_both_engines_refuse_in_the_same_words(self):
+        # Clients match on this text, so the two engines cannot each keep their
+        # own copy of it: it is pipeline.BLOCKED_MESSAGE for both.
+        for name, message in self.verdicts(title=ACCESS_DENIED_TITLES[0], challenged_for=9):
+            with self.subTest(engine=name):
+                self.assertIn(pipeline.BLOCKED_MESSAGE, message)
 
     def test_a_denied_selector_is_refused(self):
         for name, message in self.verdicts(
@@ -272,3 +359,4 @@ class DetectionConformanceTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

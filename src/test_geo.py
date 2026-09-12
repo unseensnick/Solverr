@@ -18,6 +18,9 @@ from engines import chrome_engine
 
 PROXY = {"url": "http://proxy.tld:8080", "username": "proxyuser", "password": "s3cr3t-pass"}
 OTHER_PROXY = {"url": "http://other.tld:8080"}
+# One residential endpoint, two exit countries, selected by the username.
+US_EXIT = {"url": "http://proxy.tld:8080", "username": "user-country-us", "password": "s3cr3t-pass"}
+DE_EXIT = {"url": "http://proxy.tld:8080", "username": "user-country-de", "password": "s3cr3t-pass"}
 
 
 def _tz(proxy):
@@ -28,7 +31,8 @@ def _tz(proxy):
 def _env(**overrides):
     """os.environ with BROWSER_TIMEZONE and TZ set only as given."""
     env = {k: v for k, v in os.environ.items()
-           if k not in ('BROWSER_TIMEZONE', 'BROWSER_GEO', 'LANG', 'TZ', 'SESSION_TTL_MINUTES')}
+           if k not in ('BROWSER_TIMEZONE', 'BROWSER_GEO', 'LANG', 'TZ', 'SESSION_TTL_MINUTES',
+                        'PROXY_URL', 'PROXY_USERNAME', 'PROXY_PASSWORD')}
     env.update({k: v for k, v in overrides.items() if v is not None})
     return patch.dict(os.environ, env, clear=True)
 
@@ -94,6 +98,32 @@ class PinnedTimezoneTest(unittest.TestCase):
              patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')):
             self.assertEqual(_tz(PROXY), 'Europe/Berlin')
 
+    def test_pinning_both_halves_costs_no_lookup(self):
+        # The language half used to resolve regardless, which is up to two
+        # IP-echo round trips inside the solve budget on a host with no egress.
+        with _env(BROWSER_TIMEZONE='America/Chicago', LANG='de_DE.UTF-8'), \
+             patch.object(geo, '_from_egress', return_value=('Europe/Oslo', 'nb-NO')) as resolve:
+            geo.browser_identity(geo.proxy_to_config(PROXY))
+        resolve.assert_not_called()
+
+    def test_a_pinned_zone_is_not_looked_up_for_the_language(self):
+        asked = []
+        with _env(BROWSER_TIMEZONE='America/Chicago'), \
+             patch.object(geo, '_load_resolver',
+                          return_value=(lambda tz, _p: asked.append(tz) or _Geo(tz, None),
+                                        lambda _ip, _p: 'de-DE')):
+            geo.browser_language(geo.proxy_to_config(PROXY))
+        self.assertEqual(asked, ['America/Chicago'])
+
+    def test_a_pinned_language_is_not_looked_up_for_the_zone(self):
+        asked = []
+        with _env(LANG='de_DE.UTF-8'), \
+             patch.object(geo, '_load_resolver',
+                          return_value=(lambda _tz, _p: _Geo('Europe/Berlin', None),
+                                        lambda ip, _p: asked.append(ip) or 'nb-NO')):
+            geo.browser_identity(geo.proxy_to_config(PROXY))
+        self.assertEqual(asked, [])
+
 
 class ResolvedTimezoneTest(unittest.TestCase):
 
@@ -123,6 +153,72 @@ class ResolvedTimezoneTest(unittest.TestCase):
             _tz(PROXY)
             _tz(OTHER_PROXY)
         self.assertEqual(resolve.call_count, 2)
+
+    def test_exits_differing_only_by_username_are_resolved_separately(self):
+        # A residential provider picks the exit country through the username, so
+        # one server with two usernames is two countries, not one cached zone.
+        with _env(), patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')) as resolve:
+            _tz(US_EXIT)
+            _tz(DE_EXIT)
+        self.assertEqual(resolve.call_count, 2)
+
+    def test_the_cache_key_does_not_carry_the_password(self):
+        self.assertNotIn('s3cr3t-pass', geo._cache_key(geo.proxy_to_config(PROXY)))
+
+
+class _Clock:
+    """A monotonic clock a test can advance, in place of geo's time module."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+
+class FailedResolutionCacheTest(unittest.TestCase):
+    """A bad moment must not pin the fallback pair for the whole session TTL."""
+
+    def setUp(self):
+        geo.reset_cache()
+
+    def test_a_failure_is_not_looked_up_again_inside_its_window(self):
+        with _env(), patch.object(geo, 'time', _Clock()), \
+             patch.object(geo, '_from_egress', return_value=(None, None)) as resolve:
+            _tz(PROXY)
+            _tz(PROXY)
+        self.assertEqual(resolve.call_count, 1)
+
+    def test_a_failure_is_looked_up_again_once_its_window_passes(self):
+        clock = _Clock()
+        with _env(), patch.object(geo, 'time', clock), \
+             patch.object(geo, '_from_egress', return_value=(None, None)) as resolve:
+            _tz(PROXY)
+            clock.now += geo._FAILURE_CACHE_SECONDS + 1
+            _tz(PROXY)
+        self.assertEqual(resolve.call_count, 2)
+
+    def test_a_resolved_pair_outlives_that_window(self):
+        clock = _Clock()
+        with _env(), patch.object(geo, 'time', clock), \
+             patch.object(geo, '_from_egress',
+                          return_value=('Europe/Berlin', 'de-DE')) as resolve:
+            _tz(PROXY)
+            clock.now += geo._FAILURE_CACHE_SECONDS + 1
+            _tz(PROXY)
+        self.assertEqual(resolve.call_count, 1)
+
+    def test_a_failure_never_replaces_a_resolved_pair(self):
+        def resolved_meanwhile(proxy_config, *hints):
+            # Another thread resolved the same exit while this lookup was out:
+            # the lookups run outside the lock, so the slow failing one lands
+            # last and used to overwrite the good answer.
+            with patch.object(geo, '_from_egress', return_value=('Europe/Berlin', 'de-DE')):
+                geo._resolved(proxy_config, *hints)
+            return None, None
+
+        with _env(), patch.object(geo, '_from_egress', side_effect=resolved_meanwhile):
+            self.assertEqual(_tz(PROXY), 'Europe/Berlin')
 
 
 class _Geo:
@@ -182,6 +278,35 @@ class ResolutionFailureTest(unittest.TestCase):
             raise RuntimeError("nope")
         with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')), \
              self.assertLogs(level='WARNING') as logs:
+            geo._from_egress(geo.proxy_to_config(PROXY))
+        self.assertNotIn('s3cr3t-pass', logs.output[0])
+
+    def test_a_password_inside_the_proxy_url_is_never_logged(self):
+        def boom(*_args):
+            raise RuntimeError("nope")
+        inline = {"url": "http://proxyuser:s3cr3t-pass@proxy.tld:8080"}
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')),              self.assertLogs(level='WARNING') as logs:
+            geo._from_egress(geo.proxy_to_config(inline))
+        self.assertNotIn('s3cr3t-pass', logs.output[0])
+
+    def test_a_percent_encoded_password_the_resolver_quotes_back_is_never_logged(self):
+        # invisible_core builds its URL with quote(password, safe=''), so the
+        # message carries the encoded form, not the one the config holds.
+        def boom(*_args):
+            raise RuntimeError("Failed to parse: "
+                               "http://proxyuser:p%40ss%20w%2Frd%231@proxy.tld:8080")
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')),              self.assertLogs(level='WARNING') as logs:
+            geo._from_egress(geo.proxy_to_config({"url": "http://proxy.tld:8080",
+                                                  "username": "proxyuser",
+                                                  "password": "p@ss w/rd#1"}))
+        self.assertNotIn('p%40ss%20w%2Frd%231', logs.output[0])
+
+    def test_a_password_the_resolver_quotes_back_is_never_logged(self):
+        # invisible_core builds its own credentialed URL and puts it in the
+        # error, so the message carries the password the config kept separate.
+        def boom(*_args):
+            raise RuntimeError("Failed to parse: http://proxyuser:s3cr3t-pass@proxy.tld:8080")
+        with patch.object(geo, '_load_resolver', return_value=(boom, lambda *_a: 'de-DE')),              self.assertLogs(level='WARNING') as logs:
             geo._from_egress(geo.proxy_to_config(PROXY))
         self.assertNotIn('s3cr3t-pass', logs.output[0])
 
@@ -392,6 +517,15 @@ class EnvProxyTest(unittest.TestCase):
         with _env(PROXY_URL=None):
             self.assertIsNone(config.env_proxy())
 
+    def test_an_empty_proxy_url_says_so_once(self):
+        # It used to fail every request, which was at least loud; now the
+        # traffic quietly leaves on the server's own address instead.
+        config._warned_empty_proxy = False
+        with _env(PROXY_URL=''), self.assertLogs(level='WARNING') as logs:
+            config.env_proxy()
+            config.env_proxy()
+        self.assertEqual(len(logs.output), 1)
+
     def test_a_bare_url_needs_no_credentials(self):
         with patch.dict(os.environ, {'PROXY_URL': 'http://p:1'}, clear=True):
             self.assertEqual(config.env_proxy(), {"url": "http://p:1"})
@@ -407,3 +541,58 @@ class EnvProxyTest(unittest.TestCase):
         with patch.dict(os.environ, {'PROXY_URL': 'http://p:1', 'PROXY_USERNAME': 'u',
                                      'PROXY_PASSWORD': 'x'}, clear=True):
             self.assertIn('username', geo.proxy_to_config(config.env_proxy()))
+
+
+class EnvProxyInjectionTest(unittest.TestCase):
+    """What the /v1 route puts on a request that carries no proxy of its own."""
+
+    def injected(self, **env):
+        import flaresolverr
+        data = {"cmd": "request.get", "url": "https://example-site.tld/"}
+        seen = {}
+
+        class _Req:
+            json = data
+
+        class _Res:
+            __error_500__ = False
+
+        def handler(req):
+            seen['proxy'] = req.proxy
+            return _Res()
+
+        with _env(**env), \
+                patch.object(flaresolverr, 'request', _Req), \
+                patch.object(flaresolverr.flaresolverr_service, 'controller_v1_endpoint',
+                             handler):
+            flaresolverr.controller_v1()
+        return seen['proxy']
+
+    def test_an_empty_proxy_url_means_no_proxy(self):
+        self.assertIsNone(self.injected(PROXY_URL=''))
+
+    def test_a_configured_proxy_url_is_injected(self):
+        self.assertEqual(self.injected(PROXY_URL='http://proxy.tld:8080'),
+                         {"url": "http://proxy.tld:8080"})
+
+    def test_configured_credentials_are_injected_with_it(self):
+        self.assertEqual(self.injected(PROXY_URL='http://proxy.tld:8080',
+                                       PROXY_USERNAME='me', PROXY_PASSWORD='pw'),
+                         {"url": "http://proxy.tld:8080", "username": "me", "password": "pw"})
+
+
+class ResolvedCacheBoundTest(unittest.TestCase):
+    """The cache key comes from a request field, so the cache is bounded."""
+
+    def setUp(self):
+        geo.reset_cache()
+
+    def tearDown(self):
+        geo.reset_cache()
+
+    def test_a_client_sending_endless_proxies_cannot_grow_it(self):
+        with patch.object(geo, '_load_resolver', return_value=_resolver()):
+            for i in range(geo._MAX_CACHED_EXITS + 25):
+                geo.browser_identity({"server": "http://proxy-%d.tld:8080" % i})
+
+        self.assertEqual(len(geo._cache), geo._MAX_CACHED_EXITS)

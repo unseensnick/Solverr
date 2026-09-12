@@ -8,11 +8,12 @@ Run: PYTHONPATH=src uv run --no-project python -m unittest test_stealth_click
 """
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from playwright_captcha import CaptchaType
-
-from detection import TURNSTILE_SELECTORS
+import pipeline
+from detection import ACCESS_DENIED_TITLES, TURNSTILE_SELECTORS
+from engines import stealth_engine
 from engines.stealth_engine import StealthEngine
 
 TOKEN_INPUT = TURNSTILE_SELECTORS[0]
@@ -21,6 +22,8 @@ TOKEN_INPUT = TURNSTILE_SELECTORS[0]
 # at the top of every detection pass, so one round is consumed per pass.
 CHALLENGED = ("Just a moment...", frozenset({"#challenge-form"}))
 CLEARED = ("Example Domain", frozenset())
+# The page Cloudflare serves when the address itself is refused.
+DENIED = (ACCESS_DENIED_TITLES[0], frozenset())
 # A site's own widget: the token input with none of Cloudflare's page markup.
 WIDGET = ("Sign in", frozenset({TOKEN_INPUT}))
 # The same, on a site that happens to name its container the way Cloudflare's
@@ -31,6 +34,10 @@ INTERSTITIAL = ("Just a moment...", frozenset({"#challenge-form", TOKEN_INPUT}))
 
 CHECKBOX_ROW = {"x": 100.0, "y": 200.0, "width": 300.0, "height": 65.0}
 FULL_PAGE = {"x": 0.0, "y": 0.0, "width": 1280.0, "height": 800.0}
+# An inline wrapper the page collapsed around the hidden input: too narrow, and
+# too short, to be the checkbox row a click has to land on.
+NARROW_BOX = {"x": 100.0, "y": 200.0, "width": 24.0, "height": 65.0}
+FLAT_BOX = {"x": 100.0, "y": 200.0, "width": 300.0, "height": 4.0}
 IFRAME_RECT = {"x": 400.0, "y": 500.0, "width": 300.0, "height": 65.0}
 
 
@@ -90,13 +97,16 @@ class FakePage:
 
     url = "https://example.tld/"
 
-    def __init__(self, rounds, *, token="", container_box=None, frames=()):
+    def __init__(self, rounds, *, token="", container_box=None, frames=(),
+                 selector_raises_once=False):
         self._rounds = list(rounds)
         self._title, self._present = self._rounds[0]
         self.token = token
         self.container_box = container_box
         self.frames = list(frames)
         self.mouse = FakeMouse()
+        # What a live page does when it navigates under a read in flight.
+        self._selector_raises_once = selector_raises_once
 
     async def title(self):
         if len(self._rounds) > 1:
@@ -105,6 +115,9 @@ class FakePage:
         return self._title
 
     async def query_selector(self, selector):
+        if self._selector_raises_once:
+            self._selector_raises_once = False
+            raise Exception("Execution context was destroyed, most likely because of a navigation")
         return object() if selector in self._present else None
 
     def locator(self, selector):
@@ -123,10 +136,9 @@ def engine() -> StealthEngine:
     return StealthEngine.__new__(StealthEngine)
 
 
-async def wait_until_cleared(page, captcha_type=CaptchaType.CLOUDFLARE_TURNSTILE,
-                             budget=6.0) -> bool:
+async def wait_until_cleared(page, budget=6.0) -> bool:
     deadline = asyncio.get_running_loop().time() + budget
-    return await engine()._wait_until_cleared(None, page, captcha_type, deadline)
+    return await engine()._wait_until_cleared(page, deadline)
 
 
 # The confirm delay and the poll interval are the clock, and waiting them out
@@ -165,6 +177,16 @@ class WidgetMeasurement(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await engine()._widget_box(page))
 
+    async def test_a_container_narrower_than_a_checkbox_row_is_not_a_widget(self):
+        page = FakePage([INTERSTITIAL], container_box=NARROW_BOX)
+
+        self.assertIsNone(await engine()._widget_box(page))
+
+    async def test_a_container_flatter_than_a_checkbox_row_is_not_a_widget(self):
+        page = FakePage([INTERSTITIAL], container_box=FLAT_BOX)
+
+        self.assertIsNone(await engine()._widget_box(page))
+
     async def test_nothing_is_clicked_when_the_widget_cannot_be_measured(self):
         page = FakePage([INTERSTITIAL], container_box=None)
 
@@ -182,6 +204,17 @@ class TokenRead(unittest.IsolatedAsyncioTestCase):
         page = FakePage([WIDGET], token="")
 
         self.assertIsNone(await engine()._turnstile_token(page))
+
+
+class InterstitialRead(unittest.IsolatedAsyncioTestCase):
+    """Asked exactly when the token fills, which is when the page navigates."""
+
+    async def test_a_read_that_races_the_clearing_navigation_is_not_fatal(self):
+        # The filled token is what makes an interstitial submit and leave, so
+        # this read is the most likely one to find the document gone.
+        page = FakePage([WIDGET], selector_raises_once=True)
+
+        self.assertFalse(await engine()._is_interstitial(page))
 
 
 class ChallengeWait(unittest.IsolatedAsyncioTestCase):
@@ -214,6 +247,25 @@ class ChallengeWait(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.mouse.clicks, [])
 
     @fast_clock
+    async def test_a_checkbox_that_appears_later_is_still_clicked(self):
+        # Cloudflare injects the widget after the interstitial's first render, so
+        # what the page carried at the first look does not decide the whole wait.
+        page = FakePage([CHALLENGED, INTERSTITIAL], container_box=CHECKBOX_ROW)
+
+        await wait_until_cleared(page, budget=0.3)
+
+        self.assertNotEqual(page.mouse.clicks, [])
+
+    @fast_clock
+    async def test_a_page_that_turns_denied_mid_wait_is_refused_in_the_shared_words(self):
+        page = FakePage([CHALLENGED, DENIED])
+
+        with self.assertRaises(Exception) as caught:
+            await wait_until_cleared(page, budget=0.3)
+
+        self.assertEqual(str(caught.exception), pipeline.BLOCKED_MESSAGE)
+
+    @fast_clock
     async def test_an_answered_standalone_widget_is_solved(self):
         page = FakePage([WIDGET], token="cf-token-value")
 
@@ -234,3 +286,60 @@ class ChallengeWait(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueuedOnTheContext(unittest.IsolatedAsyncioTestCase):
+    """Waiting for the context to be free is spent from the same budget."""
+
+    async def test_the_wait_for_the_context_comes_out_of_the_budget(self):
+        from dtos import V1RequestBase
+        eng = engine()
+        ctx = SimpleNamespace(lock=asyncio.Lock(), page=None)
+        granted = []
+
+        async def fake_solve(_req, _ctx, _method, timeout):
+            granted.append(timeout)
+            return "solved"
+
+        eng._navigate_and_solve = fake_solve
+        await ctx.lock.acquire()
+
+        async def release_soon():
+            await asyncio.sleep(0.2)
+            ctx.lock.release()
+
+        asyncio.create_task(release_soon())
+        await eng._do_solve(V1RequestBase({"url": "https://example.tld/"}), ctx, "GET", 5.0)
+
+        self.assertLess(granted[0], 5.0)
+
+
+class ThrowawayClickPage(unittest.IsolatedAsyncioTestCase):
+    """The page the paid solver runs on is closed even when it never starts."""
+
+    def test_a_solver_that_fails_to_start_leaves_no_page_open(self):
+        from engine_fakes import StealthHarness, World
+
+        class _Failing:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                raise Exception("solver could not be prepared")
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        # Challenged for longer than the window can poll: the escalation is
+        # only reached by a challenge that never clears on its own.
+        world = World(title="Just a moment...", challenged_for=10 ** 6)
+        with patch.object(stealth_engine.config, "api_solver_enabled", lambda: True), \
+                patch.object(stealth_engine, "ClickSolver", _Failing), \
+                patch.multiple(stealth_engine, _POLL_SECONDS=0.01,
+                               _CHALLENGE_CONFIRM_SECONDS=0.01):
+            try:
+                StealthHarness().solve(world, timeout=1.0)
+            except Exception:
+                pass
+
+        self.assertEqual([page.closed for page in world.extra_pages], [True])

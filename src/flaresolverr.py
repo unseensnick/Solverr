@@ -9,13 +9,15 @@ from bottle import run, response, Bottle, request, ServerAdapter
 from bottle_plugins.error_plugin import error_plugin
 from bottle_plugins.logger_plugin import logger_plugin
 from bottle_plugins import prometheus_plugin
+import config
 from dtos import V1RequestBase
 import flaresolverr_service
 import utils
 
-env_proxy_url = os.environ.get('PROXY_URL', None)
-env_proxy_username = os.environ.get('PROXY_USERNAME', None)
-env_proxy_password = os.environ.get('PROXY_PASSWORD', None)
+
+# The background reaper, once the server has started it. Kept so its stop() can
+# be reached.
+SESSION_REAPER = None
 
 
 class JSONErrorBottle(Bottle):
@@ -55,12 +57,16 @@ def controller_v1():
     Controller v1
     """
     data = request.json or {}
-    if (('proxy' not in data or not data.get('proxy')) and env_proxy_url is not None and (env_proxy_username is None and env_proxy_password is None)):
-        logging.info('Using proxy URL ENV')
-        data['proxy'] = {"url": env_proxy_url}
-    if (('proxy' not in data or not data.get('proxy')) and env_proxy_url is not None and (env_proxy_username is not None or env_proxy_password is not None)):
-        logging.info('Using proxy URL, username & password ENVs')
-        data['proxy'] = {"url": env_proxy_url, "username": env_proxy_username, "password": env_proxy_password}
+    if not data.get('proxy'):
+        # One reader for the proxy environment (config.env_proxy), shared with
+        # the startup lookup and the passthrough. Upstream read PROXY_URL here
+        # itself and only checked that it was set, so PROXY_URL= (empty, the
+        # shape a compose file leaves behind) sent every request a proxy with no
+        # server and failed all of them with an error the client never caused.
+        env_proxy = config.env_proxy()
+        if env_proxy is not None:
+            logging.info('Using the proxy from the environment')
+            data['proxy'] = env_proxy
     req = V1RequestBase(data)
     res = flaresolverr_service.controller_v1_endpoint(req)
     if res.__error_500__:
@@ -147,12 +153,15 @@ if __name__ == "__main__":
     reaper_managers = [flaresolverr_service.SESSIONS_STORAGE]
     if flaresolverr_service.STEALTH_ENGINE is not None:
         reaper_managers.append(flaresolverr_service.STEALTH_ENGINE)
-    SessionReaper(
+    # Kept, rather than started and forgotten: its stop() is the only way to
+    # bring the thread down, and nothing could reach it.
+    SESSION_REAPER = SessionReaper(
         reaper_managers,
         timedelta(minutes=config.session_ttl_minutes()),
         config.session_max(),
         config.reaper_interval_seconds(),
-    ).start()
+    )
+    SESSION_REAPER.start()
 
     # start the optional passthrough proxy (dormant unless PASSTHROUGH_ENABLED)
     import passthrough
