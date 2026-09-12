@@ -294,7 +294,7 @@ Notes and limits:
 - **`GET`/`HEAD` only**; request bodies aren't forwarded. Most indexer definitions are `GET`.
 - Encode the mirror as a **bare host** (`example-site.tld`), not `https://…`, because clients that normalise `//` in a path would otherwise corrupt an embedded scheme.
 - Static assets are answered `404` rather than solved: a path ending in a script, stylesheet, image, font or video extension is never worth a browser. The check reads the path only, so a page whose query string happens to end that way is still fetched.
-- Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking.
+- Successful bodies are cached for `PASSTHROUGH_CACHE_TTL`; challenge pages and non-2xx responses are not, so a transient block retries rather than sticking. A site answers a bad moment with its own error page under HTTP 200, which looks like any other page from here, so `PASSTHROUGH_CACHE_REQUIRES` lets you name something every real page carries; a body without it is kept for a minute instead of the full window.
 - The cache holds at most `PASSTHROUGH_CACHE_MAX_BYTES` in total. The TTL alone bounded how long a body was kept but not how much was kept, so a client walking many pages inside one TTL window could hold all of them at once.
 - It's still bound by IP reputation like any solve (see [Proxy & reliability](#proxy--reliability)). If a site blocks your IP, a residential `PROXY_URL` applies to passthrough solves too.
 
@@ -351,6 +351,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `PASSTHROUGH_ALLOWED_HOSTS`| none      | Comma-separated hosts it may fetch (the upstream is the first path segment). Empty = every request is answered `404`, so it's never a blind open proxy. |
 | `PASSTHROUGH_PORT`         | `8888`    | Listening port.                                                                |
 | `PASSTHROUGH_CACHE_TTL`    | `3600`    | Seconds to cache a solved 2xx body (`0` disables). Challenge pages are never cached. |
+| `PASSTHROUGH_CACHE_REQUIRES` | (unset)   | A string a solved body must contain to be cached for the full TTL, for example the link prefix your indexer's result rows use. A body without it is kept for 60 seconds, so one identical burst still costs one solve while a transient error page clears itself. Unset caches every 2xx body for the full TTL. |
 | `PASSTHROUGH_CACHE_MAX_BYTES` | `268435456` | Ceiling on the total bytes the cache holds (`0` lifts it). Past the ceiling the soonest-to-expire entries are evicted first. A single body over a quarter of the ceiling is served but not cached. |
 | `PASSTHROUGH_TIMEOUT_MS`   | `90000`   | `maxTimeout` handed to the solver per request. Kept under the ~100s an indexer app waits before recording a failure and backing the indexer off. `0` or less falls back to 60000, the same budget the API gives a request that asks for none. |
 

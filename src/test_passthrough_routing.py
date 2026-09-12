@@ -188,11 +188,12 @@ class PassthroughListenerTest(unittest.TestCase):
     def setUp(self):
         self._saved = (passthrough._ALLOWED_HOSTS, passthrough._DEFAULT_HOST,
                        passthrough._CACHE_TTL, passthrough._CACHE_MAX_BYTES,
-                       passthrough._TIMEOUT_MS)
+                       passthrough._TIMEOUT_MS, passthrough._CACHE_REQUIRES)
 
     def tearDown(self):
         (passthrough._ALLOWED_HOSTS, passthrough._DEFAULT_HOST, passthrough._CACHE_TTL,
-         passthrough._CACHE_MAX_BYTES, passthrough._TIMEOUT_MS) = self._saved
+         passthrough._CACHE_MAX_BYTES, passthrough._TIMEOUT_MS,
+         passthrough._CACHE_REQUIRES) = self._saved
 
     def test_the_listener_binds_the_interface_from_host(self):
         address = _start_captured(PASSTHROUGH_ENABLED="true", HOST="127.0.0.1")
@@ -201,6 +202,14 @@ class PassthroughListenerTest(unittest.TestCase):
     def test_the_listener_binds_every_interface_when_host_is_unset(self):
         address = _start_captured(PASSTHROUGH_ENABLED="true")
         self.assertEqual(address[0], "0.0.0.0")
+
+    def test_the_cache_marker_reaches_the_module_from_the_environment(self):
+        _start_captured(PASSTHROUGH_ENABLED="true", PASSTHROUGH_CACHE_REQUIRES="/torrent/")
+        self.assertEqual(passthrough._CACHE_REQUIRES, "/torrent/")
+
+    def test_no_cache_marker_leaves_every_body_cacheable(self):
+        _start_captured(PASSTHROUGH_ENABLED="true")
+        self.assertEqual(passthrough._CACHE_REQUIRES, "")
 
     def test_a_non_positive_timeout_falls_back_to_the_v1_default(self):
         _start_captured(PASSTHROUGH_ENABLED="true", PASSTHROUGH_TIMEOUT_MS="0")

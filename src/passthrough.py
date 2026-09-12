@@ -25,6 +25,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Optional
 
 import config
 import detection
@@ -58,6 +59,15 @@ _ALLOWED_HOSTS = set()
 _DEFAULT_HOST = None
 _CACHE_TTL = 0
 _CACHE_MAX_BYTES = 0
+# A string a body must contain to be kept for the full TTL (empty: keep every
+# 2xx body, which is what this did before).
+_CACHE_REQUIRES = ""
+
+# What a body without that string is kept for instead. Long enough that an
+# indexer's own burst (a test, then a search, then the *arr apps behind it)
+# still costs one solve, short enough that a transient upstream error clears
+# itself rather than being served for the rest of the hour.
+_SUSPECT_CACHE_TTL = 60
 _TIMEOUT_MS = 120000
 
 # One body may occupy at most this share of the cap. Without it a single large
@@ -147,7 +157,30 @@ def reset_cache() -> None:
         _cache_bytes = 0
 
 
-def _cache_store(raw: str, status: int, body: bytes, content_type: str) -> bool:
+def _earns_full_ttl(body: bytes) -> bool:
+    """Whether this body looks like a real page rather than a bad moment.
+
+    Only as good as what the deployer named: with nothing configured every body
+    earns the full TTL, exactly as before.
+    """
+    if not _CACHE_REQUIRES:
+        return True
+    return _CACHE_REQUIRES.encode("utf-8", "replace") in body
+
+
+def _cache_ttl_for(body: bytes) -> int:
+    """How long this body is worth keeping.
+
+    The full TTL for a page that looks real, a short window for one that may be
+    a bad moment. Never longer than the deployer asked for.
+    """
+    if _earns_full_ttl(body):
+        return _CACHE_TTL
+    return min(_SUSPECT_CACHE_TTL, _CACHE_TTL)
+
+
+def _cache_store(raw: str, status: int, body: bytes, content_type: str,
+                 ttl: Optional[int] = None) -> bool:
     """Cache `body` under `raw`, evicting as needed to stay under the byte cap.
 
     Returns whether it was stored, which is not the same as whether it was
@@ -180,7 +213,8 @@ def _cache_store(raw: str, status: int, body: bytes, content_type: str) -> bool:
                 if _cache_bytes + size <= _CACHE_MAX_BYTES:
                     break
                 _drop(key)
-        _cache[raw] = (stored_at + _CACHE_TTL, status, body, content_type)
+        _cache[raw] = (stored_at + (_CACHE_TTL if ttl is None else ttl),
+                       status, body, content_type)
         _cache_bytes += size
     return True
 
@@ -306,15 +340,20 @@ class _Handler(BaseHTTPRequestHandler):
                 _CACHE_TTL > 0 and 200 <= status < 300
                 and not detection.looks_like_challenge_html(solution.response)
             )
+            # A page the site served under 200 can still be a bad moment (its
+            # own error page, an empty result set), and nothing in the response
+            # says so. PASSTHROUGH_CACHE_REQUIRES names what a real page carries;
+            # a body without it is kept briefly rather than for the whole TTL.
+            ttl = _cache_ttl_for(body)
             # Eligible is not the same as stored: the byte cap can still refuse it,
             # so the log below reports what actually happened.
-            cached = cacheable and _cache_store(raw, status, body, content_type)
+            cached = cacheable and _cache_store(raw, status, body, content_type, ttl)
             pending.status = status
             pending.body = body
             pending.content_type = content_type
             logging.info("[pt %s] %s %s <- %d in %.1fs (%d bytes%s)",
                          rid, self.command, raw, status, time.monotonic() - started,
-                         len(body), ", cached" if cached else "")
+                         len(body), ", cached for %ds" % ttl if cached else "")
             self._send(status, body, content_type)
         finally:
             with _lock:
@@ -338,12 +377,14 @@ def start():
         return
 
     global _ALLOWED_HOSTS, _DEFAULT_HOST, _CACHE_TTL, _CACHE_MAX_BYTES, _TIMEOUT_MS
+    global _CACHE_REQUIRES
     hosts = config.passthrough_allowed_hosts()
     _ALLOWED_HOSTS = set(hosts)
     # First allow-listed host is the mirror used for site-internal absolute links.
     _DEFAULT_HOST = hosts[0] if hosts else None
     _CACHE_TTL = config.passthrough_cache_ttl()
     _CACHE_MAX_BYTES = config.passthrough_cache_max_bytes()
+    _CACHE_REQUIRES = config.passthrough_cache_requires()
     _TIMEOUT_MS = _effective_timeout_ms(config.passthrough_timeout_ms())
     port = config.passthrough_port()
     host_bind = _listen_host()

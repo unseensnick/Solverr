@@ -314,6 +314,21 @@ def passthrough_cache_ttl() -> int:
     return _int_env('PASSTHROUGH_CACHE_TTL', 3600)
 
 
+def passthrough_cache_requires() -> str:
+    """A string a solved body must contain to earn the full cache TTL.
+
+    Empty by default, which caches every 2xx body for the full TTL. A site
+    answers a transient failure with its own error page, under HTTP 200 and with
+    its usual layout around it, so nothing in the response says not to keep it:
+    an hour of that is an indexer that looks broken while the site is fine.
+    Naming something every real page carries (a link prefix its result rows use,
+    a marker in its footer) gives the proxy a way to tell the two apart, and a
+    body without it is kept only briefly instead of not at all, so a burst of
+    identical requests still costs one solve.
+    """
+    return os.environ.get('PASSTHROUGH_CACHE_REQUIRES', '').strip()
+
+
 def passthrough_cache_max_bytes() -> int:
     """Ceiling on the total bytes the response cache may hold (0 or less lifts it).
 
