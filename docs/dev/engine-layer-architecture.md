@@ -9,21 +9,23 @@ client can observe lives at one site.
 
 ## Why
 
-Two problems with one root cause: the shared seam is drawn too low (only `detection.py`, `geo.py`
-and `postform.py` are shared) and nothing enforces parity above it.
+The diagnosis this program was written from, as it stood on 2026-08-25. Two problems with one root
+cause: the shared seam was drawn too low (only `detection.py`, `geo.py` and `postform.py` were
+shared) and nothing enforced parity above it.
 
 - **Duplication is the daily cost, and it produces bugs.** `disableMedia`, cookie-set-and-reload,
   `waitInSeconds`, `returnOnlyCookies`, `returnScreenshot`, access-denied detection and the whole
-  result assembly are each implemented once per engine. On 2026-08-25 the same cookie-ordering
+  result assembly were each implemented once per engine. On 2026-08-25 the same cookie-ordering
   defect was found in both, at `chrome_engine.py:211` and `stealth_engine.py:517`, because the rule
   was written twice. `CLAUDE.md` already half-acknowledged this by telling reviewers to expect it
   ("the same mistake usually appears in both engines, since they were written against each other"),
   which is a reviewer instruction where a structural answer belongs.
 - **Divergence has nowhere to be declared.** `tabs_till_verify` is a silent no-op on the stealth
-  engine, documented only in the README. `solution.headers` is `{}` on both because filling it for
-  one would create an asymmetry, so a capability both engines could answer stays unbuilt.
-- **The request boundary is untyped.** `V1RequestBase.__init__` is `self.__dict__.update(_dict)`, so
-  the class annotations are documentation. Measured 2026-08-25: a string in a boolean parameter
+  engine, documented only in the README. `solution.headers` was `{}` on both because filling it for
+  one would create an asymmetry, so a capability both engines could answer stayed unbuilt until
+  step 6 shipped it behind `RESPONSE_HEADERS`.
+- **The request boundary was untyped.** `V1RequestBase.__init__` was `self.__dict__.update(_dict)`,
+  so the class annotations were documentation. Measured 2026-08-25: a string in a boolean parameter
   silently inverts it, a string proxy silently disables proxying, and four parameters fail deep
   inside an engine rather than at the boundary.
 
@@ -62,7 +64,8 @@ capability need becomes routing input rather than a documentation note.
 **Reconciliations the seam must handle.** Cookies are Selenium's dialect on one side and
 Playwright's on the other, already translated by `_to_client_cookies`; the stealth engine tracks a
 main-frame response for PDF detection and Chrome has no equivalent object; sessions are two
-independent pools that can hold the same id, which `_cmd_sessions_list` works around at runtime;
+independent pools that can hold the same id, which `_cmd_sessions_list` deduplicates and which the
+controller resolves by per-host memory rather than pool order;
 and Chrome's clearing loop is bounded by `func_timeout` from outside while the stealth loop carries
 its own deadline.
 
@@ -89,10 +92,10 @@ class Engine(Protocol):
 
 Current homes and where they land.
 
-- Spine: `src/assembly.py` today (the read order and the field rules), joined later by the
-  pipeline order and the shared budget. These land in a `core/` package once there is enough to
-  justify the move; the reshape is behaviour-free and deliberately not bundled with a behaviour
-  change.
+- Spine: `src/assembly.py` (the read order and the field rules), `src/pipeline.py` (the page
+  verdict and the navigate-cookies-reload order) and `src/budget.py` (the solve deadline and what
+  is left of an engine's share). These land in a `core/` package once there is enough to justify
+  the move; the reshape is behaviour-free and deliberately not bundled with a behaviour change.
 - Boundary: new `api/` holding the typed request model that replaces `dtos.py`'s
   `__dict__.update`, and the response serialization.
 - Engines: `engines/chrome/` and `engines/stealth/`, each an adapter plus its upstream-derived core.
@@ -119,7 +122,7 @@ live-checked.
    than in a new `api/` package: moving files and changing behaviour in one diff would make both
    harder to review, so the package reshape is a later, behaviour-free move.
 2. **Conformance suite against today's engines.** Done 2026-08-25. `test_engine_conformance.py`
-   runs sixteen assertions over both engines through `engine_fakes.py`, which drives each one
+   runs its assertions over both engines through `engine_fakes.py`, which drives each one
    browser-free from a single neutral `World` and renders it in that browser's own dialect. The
    Chrome-only cookie tests it supersedes were deleted rather than left beside it, so the rules it
    covers are pinned once. Verified by mutation on each engine separately: moving either engine's
