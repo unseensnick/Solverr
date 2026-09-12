@@ -157,24 +157,30 @@ def reset_cache() -> None:
         _cache_bytes = 0
 
 
-def _earns_full_ttl(body: bytes) -> bool:
+def _earns_full_ttl(body: bytes, content_type: str = "text/html") -> bool:
     """Whether this body looks like a real page rather than a bad moment.
 
     Only as good as what the deployer named: with nothing configured every body
     earns the full TTL, exactly as before.
+
+    The rule speaks about pages, so it is only asked about pages. A PDF or an
+    image carries no page markup at all, and treating "no marker" as "suspect"
+    there would re-solve every download on a short cycle.
     """
     if not _CACHE_REQUIRES:
+        return True
+    if "html" not in (content_type or "").lower():
         return True
     return _CACHE_REQUIRES.encode("utf-8", "replace") in body
 
 
-def _cache_ttl_for(body: bytes) -> int:
+def _cache_ttl_for(body: bytes, content_type: str = "text/html") -> int:
     """How long this body is worth keeping.
 
     The full TTL for a page that looks real, a short window for one that may be
     a bad moment. Never longer than the deployer asked for.
     """
-    if _earns_full_ttl(body):
+    if _earns_full_ttl(body, content_type):
         return _CACHE_TTL
     return min(_SUSPECT_CACHE_TTL, _CACHE_TTL)
 
@@ -344,7 +350,7 @@ class _Handler(BaseHTTPRequestHandler):
             # own error page, an empty result set), and nothing in the response
             # says so. PASSTHROUGH_CACHE_REQUIRES names what a real page carries;
             # a body without it is kept briefly rather than for the whole TTL.
-            ttl = _cache_ttl_for(body)
+            ttl = _cache_ttl_for(body, content_type)
             # Eligible is not the same as stored: the byte cap can still refuse it,
             # so the log below reports what actually happened.
             cached = cacheable and _cache_store(raw, status, body, content_type, ttl)

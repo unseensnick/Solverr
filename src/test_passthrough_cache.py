@@ -154,6 +154,10 @@ class CacheSubstanceTest(unittest.TestCase):
         passthrough._CACHE_TTL = 10
         self.assertEqual(passthrough._cache_ttl_for(self.ERROR_PAGE), 10)
 
+    def test_a_non_html_body_keeps_the_full_window(self):
+        # A PDF carries no page markup, so "no marker" says nothing about it.
+        self.assertEqual(passthrough._cache_ttl_for(b"%PDF-1.4 ...", "application/pdf"), 3600)
+
     def test_the_short_window_reaches_the_stored_entry(self):
         passthrough._cache_store("/p", 200, self.ERROR_PAGE, "text/html",
                                  passthrough._cache_ttl_for(self.ERROR_PAGE))
