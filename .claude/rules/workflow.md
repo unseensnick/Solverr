@@ -17,13 +17,13 @@ After a code change with any user-facing effect, add a bullet under `## [Unrelea
 - **The CHANGELOG is for people who run Solverr, not people who work on it.** An entry earns its place only when a deployer or an API client could notice the change: behavior, config, the response shape, the image. A change that ships in the image without a visible effect (a dependency bump, a base-image change, a refactor) gets a brief plain line under `Other`, no bold headline.
 - **Contributor tooling gets no entry at all.** Agent config under `.claude/`, git hooks, CI workflows, tests, and repo docs never reach a user, so they stay in the commit history where they belong.
 - **Don't churn.** If you're iterating on something already in `[Unreleased]`, edit the existing bullet. Don't accumulate "fix X in feature Y" when Y was added in the same block.
-- Update `README.md` in the same change when behavior or config changes. Describe current behavior, not the journey.
+- Update the user docs in the same change when behavior or config changes: `README.md` for the quick start, and the matching guide in `docs/` (a new setting gets a row in `docs/configuration.md`). Describe current behavior, not the journey, and write for someone running Solverr for the first time.
 
 ## Cutting a release (user-initiated)
 
 1. Rename `## [Unreleased]` to `## [<version>]`, and collapse any entries in it that state the same fact: a fix to something added in the same release folds into that addition's entry.
 2. Add a fresh empty `## [Unreleased]` above it.
-3. Bump `version` in `package.json` and the version in the README's response example to `<version>`, and commit.
+3. Bump `version` in `package.json` and the version in the response example in `docs/api.md` to `<version>`, and commit.
 4. Tag and push: `git tag v<version> && git push origin v<version>`.
 
 The tag triggers `release-docker.yml` (builds + pushes the ghcr image) and `release.yml` (creates the GitHub Release from the `[<version>]` section). `release.yml` can also be run manually from the Actions tab (workflow_dispatch) with the version and an optional note. Don't bump the version mid-cycle; only at release-cut.
@@ -52,7 +52,7 @@ Run these against the message before committing. The first four are also enforce
 
 ## Public-facing naming
 
-**Keep the names of the sites Solverr is pointed at out of every public surface**: commit messages, branch names, `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, the pull request template, release notes, and the repo description and topics. Solverr is a general-purpose bypass proxy; naming targets makes it read as tooling for one specific site.
+**Keep the names of the sites Solverr is pointed at out of every public surface**: commit messages, branch names, `README.md`, the user guides in `docs/`, `CLAUDE.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, the pull request template, release notes, and the repo description and topics. Solverr is a general-purpose bypass proxy; naming targets makes it read as tooling for one specific site.
 
 Use generic wording instead: "a Cloudflare-gated site", "an indexer", "the default mirror", "example-site.tld" in docs and examples. Site names are fine in local test scratch files, in chat, and in a private indexer definition that lives outside this repo.
 
@@ -67,7 +67,7 @@ git config core.hooksPath .githooks
 ```
 
 - `commit-msg` rejects: a subject that is not `type(scope): summary`; a subject over 72 characters; an em dash anywhere; an AI watermark (an AI `Co-authored-by` trailer, "Generated with", the robot emoji); a bare `#N`; a domain-shaped site name or scraping vocabulary. Merge, revert, fixup and squash commits pass untouched.
-- `pre-commit` lints the lines a commit adds to `CHANGELOG.md`, `README.md`, `CONTRIBUTING.md` and `CLAUDE.md` for the naming rule and em dashes, and every `[Unreleased]` entry outside `Other` for a bold headline ending in `.`, `!` or `?`.
+- `pre-commit` lints the lines a commit adds to `CHANGELOG.md`, `README.md`, `CONTRIBUTING.md`, `CLAUDE.md` and the user guides (`docs/*.md`, not `docs/dev/`) for the naming rule and em dashes, and every `[Unreleased]` entry outside `Other` for a bold headline ending in `.`, `!` or `?`.
 - `.githooks/tests/run.sh` proves each rule above still rejects a real violation and passes a clean case. Run it after touching either hook.
 
 CI runs all of it: the Standards workflow runs the hook self-test, then `commit-msg` on every non-merge commit and `pre-commit` over the pushed range, and the Tests workflow runs the browser-free suite on every pull request. Never bypass with `--no-verify`. If a hook fires on something legitimate, fix the hook and its self-test in the same change.

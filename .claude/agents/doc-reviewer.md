@@ -24,7 +24,7 @@ Run `git diff --name-only` for changed docs (`.md`, docstrings, comments) and `g
 ## Accuracy (cross-reference with code)
 
 - Named symbols: grep every function, constant and file a doc names; verify it exists with that name and does what the doc says.
-- Env vars: most are read in `src/config.py`, a few inherited ones in `src/utils.py` and `src/flaresolverr.py`. Check the name and the default against the README's Configuration tables.
+- Env vars: most are read in `src/config.py`, a few inherited ones in `src/utils.py` and `src/flaresolverr.py`. Check the name and the default against the tables in `docs/configuration.md`.
 - Commands: verify the commands in `CLAUDE.md` and `README.md` still run as written.
 - Upstream claims: what came from FlareSolverr or Byparr, through which commit, and what is deliberately different must match `docs/dev/upstream-sync.md`, the single owner of that question.
 - Can't verify? Say so explicitly: "Could not verify X."
@@ -32,19 +32,19 @@ Run `git diff --name-only` for changed docs (`.md`, docstrings, comments) and `g
 ## Repo doc conventions
 
 - **No em dashes** in docs, comments, CHANGELOG or commits. No AI watermarks.
-- **No target-site names or scraping vocabulary** in public surfaces: commit messages, branch names, `README.md`, `CLAUDE.md`, `CHANGELOG.md`, release notes (`workflow.md`, "Public-facing naming"). The generic forms are "a Cloudflare-gated site", "an indexer", "example-site.tld". `.githooks/pre-commit` only checks added lines in CHANGELOG and README against a heuristic, so read `CLAUDE.md` and commit messages yourself.
+- **No target-site names or scraping vocabulary** in public surfaces: commit messages, branch names, `README.md`, the user guides in `docs/`, `CLAUDE.md`, `CHANGELOG.md`, release notes (`workflow.md`, "Public-facing naming"). The generic forms are "a Cloudflare-gated site", "an indexer", "example-site.tld". `.githooks/pre-commit` only checks added lines in CHANGELOG, README, CONTRIBUTING, CLAUDE.md and `docs/*.md` against a heuristic, so read `CLAUDE.md` and commit messages yourself.
 - **The bold CHANGELOG headline is the entire release note.** `release.yml` keeps only the bold text (`s/^- \*\*([^*]+)\*\*.*/- \1/`), so a new env var, default or limit a deployer must act on has to sit inside the bold. Apply that sed to every new entry. The headline is benefit-first, self-contained, ends in `.`, `!` or `?`, and names no class or mechanism.
 - **CHANGELOG scope.** Only changes a deployer or API client could notice get an entry. A dependency bump or refactor that ships in the image is a plain line under `Other`. `.claude/`, hooks, CI, tests and repo docs get no entry at all. Iterating on something already in `[Unreleased]` edits that bullet instead of adding one.
 - **Commits.** `type(scope): summary`, imperative, lower-case, <=72 chars, no trailing period. A non-trivial body leads with plain language. Never a bare `#N`; use `owner/repo#N`.
 - **Prose style.** Sentence-case headings. Flag the `prose-style.md` habits (trailing significance clauses, inflated significance, padded triples, "serves as" where "is" would do) and its vocabulary table (`leverage`, `robust`, `ensure`, sentence-initial `Additionally`). Flag the pattern, not every word: the file allows a listed word when it is the precise term.
-- **README describes current behaviour, not the journey** (`workflow.md`). `docs/dev/` records and the "Architecture (non-obvious)" bullets in `CLAUDE.md` carry reasoning and measurements on purpose.
+- **README and the `docs/` guides describe current behaviour, not the journey** (`workflow.md`), in words a first-time user follows. `docs/dev/` records and the "Architecture (non-obvious)" bullets in `CLAUDE.md` carry reasoning and measurements on purpose.
 - **Dev docs cite path plus symbol, not Solverr line numbers.** `_validate_url` in `src/flaresolverr_service.py`, not `:270`; line refs rot.
 - **Single owner per fact.** Upstream history and divergences live in `docs/dev/upstream-sync.md`; the engine-layer rationale in `docs/dev/engine-layer-architecture.md`; the law in `.claude/rules/engine-layer.md`. A fact restated in a second doc is a finding; name the canonical home.
 - **Code comments** (when the diff touches them): WHY, never WHAT (`code-quality.md`). Flag a comment that restates the adjacent code, and equally a cut that drops a measured constraint or an upstream divergence. Comments here often hold the measurement behind code that looks wrong (the `postform.py` docstring, `_resolve_challenge`), and losing one invites someone to "fix" it.
 
 ## Completeness
 
-- A behaviour or config change without `README.md` updated in the same change (`workflow.md`). A new env var in `src/config.py` with no README row is the usual case.
+- A behaviour or config change without the user docs updated in the same change (`workflow.md`). A new env var in `src/config.py` with no row in `docs/configuration.md` is the usual case.
 - A port from, or decline of, an upstream change without the ledger's audited-through row or "Deliberately different" entry updated.
 - A one-engine exception to the engine-layer law without its ledger record.
 - `CLAUDE.md` "Where things live" missing a new top-level module or still naming a removed one.

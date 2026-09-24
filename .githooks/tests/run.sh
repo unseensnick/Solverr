@@ -83,6 +83,12 @@ reset_repo; stage CONTRIBUTING.md "A line ${em} with an em dash.\n"
 check "rejects an em dash in CONTRIBUTING"     1 pre
 reset_repo; stage README.md 'Point it at example.to for testing.\n'
 check "rejects a site name in the README"      1 pre
+reset_repo; mkdir -p "$repo/docs/dev"; stage docs/guide.md "A line ${em} in a guide.\n"
+check "rejects an em dash in a docs guide"     1 pre
+reset_repo; mkdir -p "$repo/docs/dev"; stage docs/guide.md 'Point it at example.to for testing.\n'
+check "rejects a site name in a docs guide"    1 pre
+reset_repo; mkdir -p "$repo/docs/dev"; stage docs/dev/record.md 'Measured against example.to.\n'
+check "leaves docs/dev records alone"          0 pre
 reset_repo
 printf '# Changelog\n\n## [Unreleased]\n\n### Fixes\n\n- **A real headline.** Detail.\n\n## [1.0.0]\n' > "$repo/CHANGELOG.md"; g add CHANGELOG.md
 check "passes a bold CHANGELOG headline"       0 pre

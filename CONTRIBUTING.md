@@ -6,7 +6,7 @@ Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT
 
 ## Reporting a bug
 
-Use the [bug report form](https://github.com/unseensnick/Solverr/issues/new?template=bug_report.yml). Say which image tag you run, which engine was involved, and whether you use a proxy, and attach a log taken with `LOG_LEVEL=debug`. Check the README's Troubleshooting section first: a site that blocks your IP address fails on every solver, and a residential proxy fixes that where no code change can.
+Use the [bug report form](https://github.com/unseensnick/Solverr/issues/new?template=bug_report.yml). Say which image tag you run, which engine was involved, and whether you use a proxy, and attach a log taken with `LOG_LEVEL=debug`. Check the [troubleshooting guide](docs/troubleshooting.md) first: a site that blocks your IP address fails on every solver, and a residential proxy fixes that where no code change can.
 
 ## Setting up
 
@@ -67,6 +67,10 @@ If a commit is rejected, reword it with `git commit --amend`, or `git rebase -i`
 ## The CHANGELOG
 
 Add a bullet to `CHANGELOG.md` under `## [Unreleased]` only when someone running Solverr, or calling its API, could notice the change. Put it under `Additions`, `Changes`, or `Fixes`, and lead with a bold headline that says what the user gets and ends in a period. The bold headline is the entire release note, so anything a deployer must act on (a new variable, a changed default) goes inside it. Tests, CI, documentation and tooling changes get no entry. If you are unsure, leave it out and the maintainer will add it.
+
+## Documentation
+
+The user docs are `README.md` (what Solverr is and the quick start) and the guides in [docs/](docs/). A change someone running Solverr could notice updates the matching guide in the same pull request, and a new setting gets a row in [docs/configuration.md](docs/configuration.md). Write for someone setting Solverr up for the first time, and describe how it works now rather than how it got there.
 
 ## Upstream code
 

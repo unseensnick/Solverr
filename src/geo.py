@@ -25,12 +25,14 @@ finds it again. Both are cached here afterwards, so it is two round trips per
 process, not per request.
 """
 import hashlib
+import importlib
 import logging
 import os
 import threading
 import time
 from collections import OrderedDict
 from typing import Optional
+from urllib.parse import urlsplit
 
 import config
 import redact
@@ -45,8 +47,8 @@ _MIN_CACHE_SECONDS = 300
 # guess: caching it for the session TTL meant one unreachable moment pinned a
 # wrong timezone and language for the rest of the window. Long enough that a
 # burst of requests shares one failure instead of each paying for it again: a
-# failing lookup spends up to 30 seconds (three IP-echo endpoints, 10 seconds
-# each) before it gives up.
+# failing lookup spends up to 30 seconds before it gives up (the library caps
+# one exit-IP discovery at 15, and a direct connection makes two).
 _FAILURE_CACHE_SECONDS = 60
 
 # What the language falls back to when nothing can be resolved. Matches what
@@ -113,8 +115,8 @@ def browser_timezone(proxy_config: Optional[dict] = None) -> str:
     event loop.
     """
     # The language is passed as a hint, not read: when it is pinned there is
-    # nothing for the lookup to derive, and skipping it saves an IP-echo round
-    # trip that spends up to 30 seconds failing on a host with no egress.
+    # nothing for the lookup to derive, and skipping it saves an exit-IP
+    # discovery that spends up to 15 seconds failing on a host with no egress.
     return _pinned_zone() or _resolved(proxy_config, None, config.browser_locale())[0]
 
 
@@ -393,11 +395,44 @@ def _cache_seconds() -> int:
     return max(_MIN_CACHE_SECONDS, config.session_ttl_minutes() * 60)
 
 
+def extend_lookup_urls() -> None:
+    """Put GEO_IP_LOOKUP_URLS in front of invisible_core's own IP-echo services.
+
+    Call once at startup, before the first lookup. The list is a private module
+    constant, `_IP_ECHO_ENDPOINTS` in `invisible_core/_geo.py` (20.15.0), read
+    at call time by `discover_egress_ip`, and it has no setting or parameter of
+    its own. Replacing it there reaches every lookup: Solverr's own below, and
+    the one the library makes on every stealth launch behind a proxy for the
+    WebRTC address, which Solverr cannot hand a known IP to. The library's
+    15-second budget covers the whole list, so a longer one cannot make a
+    failing lookup take longer, but a slow service in front spends time the ones
+    behind it would have had.
+    """
+    urls = config.geo_ip_lookup_urls()
+    if not urls:
+        return
+    try:
+        library = importlib.import_module("invisible_core._geo")
+        builtin = library._IP_ECHO_ENDPOINTS
+    except Exception:
+        builtin = None
+    if not isinstance(builtin, tuple):
+        # Loud rather than silent: a deployer who set this to keep a service
+        # out of the path would otherwise believe it was in effect.
+        logging.warning("GEO_IP_LOOKUP_URLS has no effect: this invisible-core has no "
+                        "IP-echo list to extend, so its built-in services are used")
+        return
+    library._IP_ECHO_ENDPOINTS = tuple(dict.fromkeys(urls + list(builtin)))
+    # Hosts only: a service's URL can carry a token in its path or query.
+    logging.info("IP lookup services: %s",
+                 ", ".join(urlsplit(u).hostname or "?" for u in library._IP_ECHO_ENDPOINTS))
+
+
 def _load_resolver():
     """(prepare_session_geo, resolve_session_locale), or None if unavailable.
 
-    The only boundary this module has to the outside world, kept in one place so
-    a Chrome-only runtime missing the stealth stack degrades instead of failing.
+    The boundary to the library's resolvers, kept in one place so a Chrome-only
+    runtime missing the stealth stack degrades instead of failing.
     """
     try:
         from invisible_core import prepare_session_geo, resolve_session_locale

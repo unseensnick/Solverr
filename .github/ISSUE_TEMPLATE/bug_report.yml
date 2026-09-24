@@ -4,12 +4,12 @@ labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Thanks for the report. Please skim the README (including its Troubleshooting section) and search existing issues first.
+      value: Thanks for the report. Please skim the README and the troubleshooting guide (docs/troubleshooting.md) and search existing issues first.
   - type: checkboxes
     attributes:
       label: Before you start
       options:
-        - label: I've read the README and its Troubleshooting section
+        - label: I've read the README and the troubleshooting guide
           required: true
         - label: I've searched existing open and closed issues
           required: true
