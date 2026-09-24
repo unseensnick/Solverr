@@ -12,9 +12,9 @@ Open the site in a normal browser from the same network to confirm. The fix is a
 
 The same applies to "Cloudflare has blocked this request" or "IP banned" messages.
 
-## The app shows no results, and the log says `Challenge not detected!` with a 200
+## A protected site returns no results, and the log says `Challenge not detected!`
 
-An engine loaded the page but did not recognise a newer managed or Turnstile challenge on it, and returned it as if it were solved. Fallback exists to catch this and try the other engine, so check that `ENGINE_FALLBACK` is on (it is by default) and that the stealth engine is loaded (`STEALTH_ENGINE`, also on by default). If it still fails, the site is probably refusing your IP address: see [A site fails on both engines](#a-site-fails-on-both-engines).
+`Challenge not detected!` on its own is normal: it means the page had no challenge on it, which is what an unprotected site returns. It points to a problem only when the site is one you know is behind Cloudflare and your app gets no results. Then an engine loaded the page but did not recognise a newer managed or Turnstile challenge on it, and returned it as if there were none. Fallback exists to catch this and try the other engine, so check that `ENGINE_FALLBACK` is on (it is by default) and that the stealth engine is loaded (`STEALTH_ENGINE`, also on by default). If it still fails, the site is probably refusing your IP address: see [A site fails on both engines](#a-site-fails-on-both-engines).
 
 ## An indexer app still fails even though Solverr solved the page
 
