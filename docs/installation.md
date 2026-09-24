@@ -25,6 +25,8 @@ Solverr runs as a Docker container. The image already contains both browsers it 
        restart: unless-stopped
    ```
 
+   [examples/docker-compose.yml](../examples/docker-compose.yml) is the same file with every line explained.
+
    `shm_size` gives the browsers more shared memory than Docker's default. Leave it in: the browsers are more stable with it, and too little of it shows up as browser launch or out-of-memory errors.
 
 2. Start it from that folder:

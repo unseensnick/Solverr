@@ -1,0 +1,54 @@
+# Solverr + Prowlarr, for indexers behind Cloudflare.
+#
+# Use this when an indexer in Prowlarr keeps failing on a Cloudflare-protected
+# site even with a FlareSolverr proxy set. Solverr's passthrough hands Prowlarr
+# the solved page directly, so Prowlarr never gets challenged.
+#
+# 1. Save this file as docker-compose.yml in an empty folder.
+# 2. Change the ONE line marked "CHANGE THIS" below to your indexer's site.
+# 3. In that folder, run:   docker compose up -d
+# 4. Put your edited indexer definition in ./prowlarr/Definitions/Custom/
+#    (create the folders), then restart Prowlarr:   docker compose restart prowlarr
+#    How to edit the definition, step by step:
+#    https://github.com/unseensnick/Solverr/blob/main/docs/passthrough.md#add-an-indexer-to-prowlarr-or-jackett
+# 5. Open Prowlarr at http://localhost:9696 and add the indexer. Pick a
+#    Base URL that starts with http://solverr:8888/ and give it NO
+#    FlareSolverr or proxy tag.
+#
+# Already run Prowlarr somewhere else? Delete the prowlarr block below and put
+# your Prowlarr in the same Docker network as Solverr.
+#
+# Solverr has no password. Keep its ports on your own network and never
+# forward them from your router.
+
+services:
+  solverr:
+    image: ghcr.io/unseensnick/solverr:latest
+    container_name: solverr                      # Prowlarr reaches it as http://solverr:8888/
+    ports:
+      - "8191:8191"                              # the FlareSolverr API, for your other apps
+      # The passthrough port (8888) is not published: Prowlarr reaches it
+      # inside this network. Publish "8888:8888" only if an app on another
+      # machine needs it.
+    environment:
+      - TZ=UTC                                   # optional: your timezone, e.g. Europe/London (log times)
+      - PASSTHROUGH_ENABLED=true
+      # CHANGE THIS: the site your indexer uses, without https://.
+      # Several mirrors of the same site: separate them with commas, and put
+      # the one you want downloads served from first.
+      - PASSTHROUGH_ALLOWED_HOSTS=example-site.tld
+    shm_size: 512mb                              # keep: the browsers need the extra shared memory
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=1000                                # the user and group that own ./prowlarr
+      - PGID=1000
+      - TZ=UTC                                   # optional: your timezone
+    volumes:
+      - ./prowlarr:/config                       # Prowlarr's settings; custom definitions go in Definitions/Custom/
+    ports:
+      - "9696:9696"                              # the Prowlarr web page
+    restart: unless-stopped

@@ -12,4 +12,9 @@ New to Solverr? Start with the [quick start](../README.md#quick-start) in the ma
 | [Language and timezone](language-and-timezone.md) | control the language and timezone the browser reports, or choose the IP lookup services |
 | [Troubleshooting](troubleshooting.md) | fix a site that keeps failing, an indexer that gives up, or a browser that runs out of memory |
 
+Ready-to-use Docker Compose files are in [examples/](../examples/):
+
+- [docker-compose.yml](../examples/docker-compose.yml): Solverr on its own. Recommended for most people, and for any app with a FlareSolverr setting.
+- [docker-compose.indexers.yml](../examples/docker-compose.indexers.yml): Solverr with the passthrough, plus Prowlarr, for indexers behind Cloudflare. One line to change.
+
 Developer records (how the code is built and what came from which upstream) live in [dev/](dev/). You do not need them to run Solverr.

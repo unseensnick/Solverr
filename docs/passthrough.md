@@ -12,6 +12,12 @@ The passthrough removes that second fetch. Your app asks Solverr's passthrough p
 
 Each allowed site gets its own session, so once a site has been cleared, its next request reuses the same browser and cookies.
 
+## The ready-made setup
+
+[examples/docker-compose.indexers.yml](../examples/docker-compose.indexers.yml) runs Solverr with the passthrough turned on, together with Prowlarr, in one Docker network. Save it as `docker-compose.yml` in an empty folder, change the one line marked `CHANGE THIS` to your indexer's site, and run `docker compose up -d`. Then follow [Add an indexer to Prowlarr or Jackett](#add-an-indexer-to-prowlarr-or-jackett) from step 2, and save the definition in the `prowlarr/Definitions/Custom/` folder next to that file.
+
+If you already run Prowlarr, or want to add the passthrough to an existing Solverr, the next sections show the individual settings.
+
 ## Turn it on
 
 Add these to Solverr's `environment:` and restart it:

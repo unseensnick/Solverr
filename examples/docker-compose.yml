@@ -1,0 +1,29 @@
+# Solverr, basic setup. Recommended for most people.
+#
+# Use this if your app has a FlareSolverr setting (the *arr apps, manga and
+# novel readers, Prowlarr's indexer proxy). Solverr's built-in defaults are
+# the recommended ones, so nothing needs changing.
+#
+# 1. Save this file as docker-compose.yml in an empty folder.
+# 2. In that folder, run:   docker compose up -d
+# 3. Check it:              open http://localhost:8191/ in a browser.
+#    You should see a reply starting with {"msg": "FlareSolverr is ready!"
+# 4. In your app's FlareSolverr setting, enter:
+#      http://solverr:8191                if the app runs in this same Docker network
+#      http://<this machine's IP>:8191    otherwise, e.g. http://192.168.1.10:8191
+#
+# Solverr has no password. Keep port 8191 on your own network and never
+# forward it from your router.
+#
+# Every setting: https://github.com/unseensnick/Solverr/blob/main/docs/configuration.md
+
+services:
+  solverr:
+    image: ghcr.io/unseensnick/solverr:latest   # the published image, no build needed
+    container_name: solverr                      # other containers reach it by this name
+    ports:
+      - "8191:8191"                              # the FlareSolverr API
+    environment:
+      - TZ=UTC                                   # optional: your timezone, e.g. Europe/London (log times)
+    shm_size: 512mb                              # keep: the browsers need the extra shared memory
+    restart: unless-stopped                      # start again after a reboot

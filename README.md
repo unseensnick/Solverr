@@ -18,7 +18,7 @@ You need [Docker](https://docs.docker.com/get-docker/) with Docker Compose.
 
 ### 1. Start Solverr
 
-Make a folder, save this in it as `docker-compose.yml`, and run `docker compose up -d` from that folder:
+Make a folder, save this in it as `docker-compose.yml`, and run `docker compose up -d` from that folder. The same file with every line explained is [examples/docker-compose.yml](examples/docker-compose.yml).
 
 ```yaml
 services:
@@ -51,7 +51,7 @@ curl -sX POST 'http://localhost:8191/v1' \
   --data '{ "cmd": "request.get", "url": "https://www.google.com/", "maxTimeout": 60000 }'
 ```
 
-The reply contains `"status": "ok"`, the page's HTML, and its cookies.
+The reply contains `"status": "ok"`, the page's HTML, and its cookies. Its message says `Challenge not detected!` because that site has no protection to clear, which is normal.
 
 ### 3. Point your app at it
 
@@ -62,7 +62,7 @@ In your app's FlareSolverr setting, enter Solverr's address:
 
 In Prowlarr, go to **Settings > Indexers**, add a **FlareSolverr** indexer proxy with that address and a tag, then give the same tag to the indexers that need it.
 
-If an indexer app still fails on a Cloudflare-protected site after this, set up the [passthrough proxy](docs/passthrough.md) instead.
+If an indexer app still fails on a Cloudflare-protected site after this, use the [passthrough proxy](docs/passthrough.md) instead. [examples/docker-compose.indexers.yml](examples/docker-compose.indexers.yml) is a ready-made Solverr and Prowlarr setup for it, with one line to change.
 
 ## If a site keeps failing
 
