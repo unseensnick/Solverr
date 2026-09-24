@@ -48,6 +48,9 @@ if config.stealth_enabled():
 
 
 def test_browser_installation():
+    # Before anything that launches Chrome: the launch already resolves the
+    # browser language, so the user-agent probe below is the first exit-IP lookup.
+    geo.extend_lookup_urls()
     logging.info("Testing web browser installation...")
     logging.info("Platform: " + platform.platform())
 

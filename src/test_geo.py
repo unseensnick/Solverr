@@ -8,7 +8,9 @@ cache, and every way resolution can go wrong.
 Run: PYTHONPATH=src uv run --no-project python -m unittest test_geo
 """
 import os
+import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -32,7 +34,7 @@ def _env(**overrides):
     """os.environ with BROWSER_TIMEZONE and TZ set only as given."""
     env = {k: v for k, v in os.environ.items()
            if k not in ('BROWSER_TIMEZONE', 'BROWSER_GEO', 'LANG', 'TZ', 'SESSION_TTL_MINUTES',
-                        'PROXY_URL', 'PROXY_USERNAME', 'PROXY_PASSWORD')}
+                        'PROXY_URL', 'PROXY_USERNAME', 'PROXY_PASSWORD', 'GEO_IP_LOOKUP_URLS')}
     env.update({k: v for k, v in overrides.items() if v is not None})
     return patch.dict(os.environ, env, clear=True)
 
@@ -596,3 +598,77 @@ class ResolvedCacheBoundTest(unittest.TestCase):
                 geo.browser_identity({"server": "http://proxy-%d.tld:8080" % i})
 
         self.assertEqual(len(geo._cache), geo._MAX_CACHED_EXITS)
+
+
+class LookupUrlsSettingTest(unittest.TestCase):
+    """GEO_IP_LOOKUP_URLS as config reads it."""
+
+    def test_entries_are_split_and_blanks_skipped(self):
+        with _env(GEO_IP_LOOKUP_URLS='https://icanhazip.com, ,http://echo.tld/ip'):
+            self.assertEqual(config.geo_ip_lookup_urls(),
+                             ['https://icanhazip.com', 'http://echo.tld/ip'])
+
+    def test_an_entry_that_is_not_http_is_dropped(self):
+        with _env(GEO_IP_LOOKUP_URLS='ftp://echo.tld,https://icanhazip.com'), \
+             self.assertLogs(level='WARNING'):
+            self.assertEqual(config.geo_ip_lookup_urls(), ['https://icanhazip.com'])
+
+    def test_a_dropped_entry_is_logged_without_its_password(self):
+        with _env(GEO_IP_LOOKUP_URLS='ftp://me:s3cr3t-pass@echo.tld'), \
+             self.assertLogs(level='WARNING') as logs:
+            config.geo_ip_lookup_urls()
+        self.assertNotIn('s3cr3t-pass', str(logs.output))
+
+
+class ExtendLookupUrlsTest(unittest.TestCase):
+    """The configured services go in front of the library's, which stay."""
+
+    BUILTIN = ('https://api.ipify.org', 'https://icanhazip.com', 'https://checkip.amazonaws.com')
+
+    def extended(self, library, **env):
+        with _env(**env), patch.dict(sys.modules, {'invisible_core._geo': library}):
+            geo.extend_lookup_urls()
+        return library
+
+    def test_configured_services_are_tried_first(self):
+        library = self.extended(types.SimpleNamespace(_IP_ECHO_ENDPOINTS=self.BUILTIN),
+                                GEO_IP_LOOKUP_URLS='https://echo.tld/ip')
+        self.assertEqual(library._IP_ECHO_ENDPOINTS, ('https://echo.tld/ip',) + self.BUILTIN)
+
+    def test_a_builtin_service_named_again_moves_to_the_front_once(self):
+        library = self.extended(types.SimpleNamespace(_IP_ECHO_ENDPOINTS=self.BUILTIN),
+                                GEO_IP_LOOKUP_URLS='https://icanhazip.com')
+        self.assertEqual(library._IP_ECHO_ENDPOINTS,
+                         ('https://icanhazip.com', 'https://api.ipify.org',
+                          'https://checkip.amazonaws.com'))
+
+    def test_unset_says_nothing_even_without_the_library_list(self):
+        # A Chrome-only image has no stealth stack; nobody asked for anything.
+        with self.assertNoLogs(level='WARNING'):
+            self.extended(types.SimpleNamespace())
+
+    def test_startup_extends_the_list_before_chrome_first_looks_up(self):
+        # Launching Chrome for the user agent resolves the browser language, so
+        # extending any later leaves that lookup, and its cached answer, on the
+        # built-in services only.
+        import flaresolverr_service
+        library = types.SimpleNamespace(_IP_ECHO_ENDPOINTS=self.BUILTIN)
+        seen = []
+
+        def user_agent():
+            seen.append(library._IP_ECHO_ENDPOINTS[0])
+            return 'UA'
+
+        with _env(GEO_IP_LOOKUP_URLS='https://echo.tld/ip'), \
+             patch.dict(sys.modules, {'invisible_core._geo': library}), \
+             patch.object(flaresolverr_service.utils, 'get_chrome_exe_path', return_value='chrome'), \
+             patch.object(flaresolverr_service.utils, 'get_chrome_major_version', return_value='140'), \
+             patch.object(flaresolverr_service.utils, 'get_user_agent', side_effect=user_agent), \
+             patch.object(geo, 'browser_timezone', return_value='UTC'):
+            flaresolverr_service.test_browser_installation()
+        self.assertEqual(seen, ['https://echo.tld/ip'])
+
+    def test_a_library_without_the_list_is_reported(self):
+        with self.assertLogs(level='WARNING') as logs:
+            self.extended(types.SimpleNamespace(), GEO_IP_LOOKUP_URLS='https://echo.tld/ip')
+        self.assertIn('GEO_IP_LOOKUP_URLS has no effect', str(logs.output))

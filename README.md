@@ -366,6 +366,7 @@ A second HTTP port that returns solved page bodies directly, for clients that wo
 | `BROWSER_GEO`        | none      | One tag setting the browser's language **and** timezone. Eg `de-DE`. See below. |
 | `LANG`               | none      | Browser language for both engines. Accepts `en_US.UTF-8` or `en-US`. See below. |
 | `BROWSER_TIMEZONE`   | `auto`    | Browser timezone for both engines: an IANA zone, or `auto` to follow the exit IP. See below. |
+| `GEO_IP_LOOKUP_URLS` | none      | Comma-separated services to look up the exit IP with, tried before the built-in ones. Eg `https://icanhazip.com`. See below. |
 | `LOG_LEVEL`          | `info`    | `info` or `debug`.                                                             |
 | `LOG_FILE`           | none      | Also write logs to this file. Eg `/config/solverr.log`.                        |
 | `LOG_HTML`           | `false`   | Debug only: log all page HTML at `debug` level.                                |
@@ -415,6 +416,8 @@ Whatever the language ends up being, both engines report it as the two-entry `na
 Two things worth knowing. Forcing a language a country doesn't speak, or a timezone it isn't in, is a mismatch a site can see, so change one only if you know why. And some countries share a timezone definition with a neighbour: Norway reports `Europe/Berlin` and the Netherlands `Europe/Brussels`, which is correct rather than a bug, since those are the same zone with the same offset and the same daylight-saving rules.
 
 If the exit IP can't be reached, Solverr falls back to the container's `TZ` for the timezone and `en-US` for the language, logs a warning, and carries on; it does not fail the request. That fallback is kept for a minute and then looked up again, so a moment without network doesn't hold the wrong country in place for the rest of the cache window. A SOCKS proxy needs PySocks installed for that lookup to work, and without it you get the same fallback, so pin `BROWSER_TIMEZONE` or set `BROWSER_GEO` when using one.
+
+The exit IP is looked up through `api.ipify.org`, `icanhazip.com` and `checkip.amazonaws.com`, in that order. `GEO_IP_LOOKUP_URLS` puts your own services in front of those, and the built-in ones are still tried after them. All of them share one 15-second budget per lookup, though, so a service of yours that hangs uses up time the built-in ones would have had: list only services that answer quickly. Each must answer with nothing but the IP as plain text (`https://ifconfig.co/ip` works, its JSON form does not). If the warning says every service failed in 0.0s with a name-resolution error, the container can't resolve hostnames at all, and changing services won't help: check its DNS.
 
 ## Proxy & reliability
 

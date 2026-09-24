@@ -4,6 +4,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Additions
+
+- **Choose which services look up the exit IP for the browser timezone and language with `GEO_IP_LOOKUP_URLS`.** They are tried before the built-in ones, which stay as the fallback.
+
 ## [1.7.0]
 
 ### Additions
