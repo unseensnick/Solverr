@@ -160,8 +160,10 @@ def geo_ip_lookup_urls() -> list:
     """GEO_IP_LOOKUP_URLS: IP-echo services to try before the built-in ones when
     the exit IP is looked up for the browser timezone and language.
 
-    Comma-separated, each an http(s) URL whose whole response body is the
-    caller's IP. Added in front rather than replacing, so the services a
+    Comma-separated, each an https URL whose whole response body is the
+    caller's IP. https only, because a lookup travels through the proxy of the
+    request that triggered it, which any /v1 caller picks: over plain http that
+    proxy would read the whole request, including any token in the URL. Added in front rather than replacing, so the services a
     deployment already relies on are still tried after them (within the same
     lookup budget, see geo.extend_lookup_urls). Read once at startup, so a bad
     entry warns once and is dropped.
@@ -173,13 +175,13 @@ def geo_ip_lookup_urls() -> list:
             continue
         try:
             parts = urlsplit(value)
-            is_valid = parts.scheme in ('http', 'https') and bool(parts.hostname)
+            is_valid = parts.scheme == 'https' and bool(parts.hostname)
         except ValueError:
             is_valid = False
         if is_valid:
             urls.append(value)
         else:
-            logging.warning("GEO_IP_LOOKUP_URLS entry %r is not an http(s) URL; ignoring it",
+            logging.warning("GEO_IP_LOOKUP_URLS entry %r is not an https URL; ignoring it",
                             redact.proxy_url(value))
     return urls
 

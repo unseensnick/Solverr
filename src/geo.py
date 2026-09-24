@@ -32,6 +32,7 @@ import threading
 import time
 from collections import OrderedDict
 from typing import Optional
+from urllib.parse import urlsplit
 
 import config
 import redact
@@ -422,8 +423,9 @@ def extend_lookup_urls() -> None:
                         "IP-echo list to extend, so its built-in services are used")
         return
     library._IP_ECHO_ENDPOINTS = tuple(dict.fromkeys(urls + list(builtin)))
+    # Hosts only: a service's URL can carry a token in its path or query.
     logging.info("IP lookup services: %s",
-                 ", ".join(redact.proxy_url(u) for u in library._IP_ECHO_ENDPOINTS))
+                 ", ".join(urlsplit(u).hostname or "?" for u in library._IP_ECHO_ENDPOINTS))
 
 
 def _load_resolver():

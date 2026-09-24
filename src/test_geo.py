@@ -604,12 +604,18 @@ class LookupUrlsSettingTest(unittest.TestCase):
     """GEO_IP_LOOKUP_URLS as config reads it."""
 
     def test_entries_are_split_and_blanks_skipped(self):
-        with _env(GEO_IP_LOOKUP_URLS='https://icanhazip.com, ,http://echo.tld/ip'):
+        with _env(GEO_IP_LOOKUP_URLS='https://icanhazip.com, ,https://echo.tld/ip'):
             self.assertEqual(config.geo_ip_lookup_urls(),
-                             ['https://icanhazip.com', 'http://echo.tld/ip'])
+                             ['https://icanhazip.com', 'https://echo.tld/ip'])
 
     def test_an_entry_that_is_not_http_is_dropped(self):
         with _env(GEO_IP_LOOKUP_URLS='ftp://echo.tld,https://icanhazip.com'), \
+             self.assertLogs(level='WARNING'):
+            self.assertEqual(config.geo_ip_lookup_urls(), ['https://icanhazip.com'])
+
+    def test_a_plain_http_entry_is_dropped(self):
+        # A lookup goes through the caller's proxy, which would read it in clear.
+        with _env(GEO_IP_LOOKUP_URLS='http://echo.tld/ip?token=t0k3n,https://icanhazip.com'), \
              self.assertLogs(level='WARNING'):
             self.assertEqual(config.geo_ip_lookup_urls(), ['https://icanhazip.com'])
 
@@ -667,6 +673,12 @@ class ExtendLookupUrlsTest(unittest.TestCase):
              patch.object(geo, 'browser_timezone', return_value='UTC'):
             flaresolverr_service.test_browser_installation()
         self.assertEqual(seen, ['https://echo.tld/ip'])
+
+    def test_the_startup_line_names_hosts_without_their_tokens(self):
+        with self.assertLogs(level='INFO') as logs:
+            self.extended(types.SimpleNamespace(_IP_ECHO_ENDPOINTS=self.BUILTIN),
+                          GEO_IP_LOOKUP_URLS='https://echo.tld/ip?token=t0k3n')
+        self.assertNotIn('t0k3n', str(logs.output))
 
     def test_a_library_without_the_list_is_reported(self):
         with self.assertLogs(level='WARNING') as logs:
