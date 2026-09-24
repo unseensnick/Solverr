@@ -59,7 +59,7 @@ Each file has a different job. Update the ones this session touched.
 |---|---|---|
 | `Handoff.md` (root) | Session state | **Gitignored (`.gitignore:133`). Edit on disk, never `git add` it.** |
 | `CHANGELOG.md` `[Unreleased]` | User-facing effects | Benefit-first bold headline, effect not implementation. `.githooks/pre-commit` lints the format. |
-| `README.md` | Current behavior and config | Update in the same change as the behavior. Describe what is true now, not the journey. |
+| `README.md` and `docs/*.md` | Quick start, and the user guides for current behavior and config | Update in the same change as the behavior. Describe what is true now, not the journey. |
 | `CLAUDE.md` | Architecture, key decisions, skills index | Only when a non-obvious constraint changes. A measurement that explains a design (why the solver runs on a throwaway page) belongs here, not only in a commit body. |
 | `docs/dev/upstream-sync.md` | The sync ledger | Update the audited-through row and add any new deliberate divergence with its reasoning. An audit that does not move this file gets re-run from scratch. |
 | Memory store | Durable cross-session facts | `C:\Users\unseensnick\.claude\projects\E--Code-cloudflare-bypasses-Solverr\memory\`, one fact per file, plus a one-line pointer in `MEMORY.md`. Plain directory, no commit needed. The store is keyed on the directory the session started in, so a session rooted at the parent folder reads and writes `E--Code-cloudflare-bypasses\memory\` instead and sees none of these. |

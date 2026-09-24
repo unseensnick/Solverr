@@ -41,7 +41,7 @@ Stop and report rather than continuing if any of these fail:
 
 1. Rename `## [Unreleased]` to `## [<version>]` and add a fresh empty `## [Unreleased]` above it.
 2. Bump `version` in `package.json`.
-3. Bump the `"version"` field in the `README.md` `/v1` response example. It is easy to miss because nothing fails without it: the docs simply keep advertising the previous release. Check with `grep -n '"version"' README.md`, which should return exactly one line and it should read the version being cut. This was missed on the 1.5.0 cut.
+3. Bump the `"version"` field in the `/v1` response example in `docs/api.md`. It is easy to miss because nothing fails without it: the docs simply keep advertising the previous release. Check with `grep -n '"version"' docs/api.md`, which should return exactly one line and it should read the version being cut. This was missed on the 1.5.0 cut.
 4. Commit as `chore(release): <version>`, holding those three edits and nothing else.
 
 ## Step 4: Push, then tag
@@ -70,6 +70,6 @@ Report the tag, the release URL, both workflow outcomes, and the digests. Then g
 
 - Never push a tag without explicit confirmation in the same conversation.
 - Never force-push, and never re-tag a published version. A mistake gets a new patch version.
-- The release commit contains only the CHANGELOG rename, the `package.json` version bump, and the version in the `README.md` response example.
+- The release commit contains only the CHANGELOG rename, the `package.json` version bump, and the version in the `docs/api.md` response example.
 - Re-running `release.yml` by hand regenerates the notes and discards any manual edit to the release body. Say so if the body was edited.
 - No em dashes. Commas, parentheses, periods, colons.
