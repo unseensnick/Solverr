@@ -205,7 +205,9 @@ class StealthContext:
             humanize=True,
             timezone=timezone,
             # Concrete rather than "auto" so this browser and Chrome get the
-            # same country, and so the library resolves nothing of its own.
+            # same country, and so the library resolves no language of its own.
+            # Behind a proxy it still looks up the exit IP on every launch, for
+            # the WebRTC address, which is non-fatal there.
             locale=language,
             # Firefox renders application/json in a built-in viewer, so
             # page.content() would hand back the viewer's markup instead of the
