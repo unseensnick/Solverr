@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Solverr docs enforcement (see .claude/rules/workflow.md: "CHANGELOG" and "Public-facing naming").
-# Lints staged CHANGELOG.md, README.md, CONTRIBUTING.md and CLAUDE.md:
+# Lints staged CHANGELOG.md, README.md, CONTRIBUTING.md, CLAUDE.md and the user guides (docs/*.md,
+# not docs/dev/, which are developer records):
 #   both     - no target-site names or scraping vocabulary in newly added lines, no em dash.
 #   CHANGELOG - every new [Unreleased] entry under Additions / Changes / Fixes leads with a
 #               self-contained bold headline ending in . ! or ? (Other is exempt).
@@ -16,9 +17,11 @@ problems=0
 range="${1:-}"
 
 if [ -n "$range" ]; then
+  changed() { git diff --name-only "$range"; }
   staged() { git diff --name-only "$range" | grep -qx "$1"; }
   added()  { git diff -U0 "$range" -- "$1" | grep -E '^\+[^+]' | sed 's/^+//'; }
 else
+  changed() { git diff --cached --name-only; }
   staged() { git diff --cached --name-only | grep -qx "$1"; }
   added()  { git diff --cached -U0 -- "$1" | grep -E '^\+[^+]' | sed 's/^+//'; }
 fi
@@ -29,7 +32,7 @@ name_patterns='(^|[^A-Za-z0-9./@-])[a-z0-9][a-z0-9-]{1,}\.(to|st|se|nl|cc|ws|eu|
 local_deny="$(dirname "$0")/deny-names.local"
 [ -f "$local_deny" ] && name_patterns="$name_patterns|$(paste -sd'|' "$local_deny")"
 
-for f in CHANGELOG.md README.md CONTRIBUTING.md CLAUDE.md; do
+for f in CHANGELOG.md README.md CONTRIBUTING.md CLAUDE.md $(changed | grep -E '^docs/[^/]+\.md$'); do
   staged "$f" || continue
   new=$(added "$f")
   [ -n "$new" ] || continue
