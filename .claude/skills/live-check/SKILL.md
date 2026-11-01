@@ -25,10 +25,13 @@ When a run fails, the first question is always "does the bare browser do this to
 Never reuse or restart the owner's `solverr` container, and never bind its ports blindly. Build a distinct tag and run a distinct name:
 
 ```
-docker build -t solverr:livetest .
+docker build --no-cache --pull -t solverr:livetest .
+docker run --rm --entrypoint chromium solverr:livetest --version
 docker run -d --name solverr-livetest --shm-size=512m -p 8191:8191 \
   -e LOG_LEVEL=debug -e STEALTH_ENGINE=true -e DEFAULT_ENGINE=chrome solverr:livetest
 ```
+
+`--no-cache` is not optional. The Dockerfile's `apt-get install chromium` is unpinned, so a cached layer keeps whichever Chromium it first resolved while CI installs the current one, and the run then proves nothing about what ships. 1.9.1 went out that way: tested on 151, shipped on 156. Report the version printed above, and build an A/B control the same way so both sides run the same browser.
 
 Check for a name or port clash first (`docker ps -a`). If the owner's container exists and is stopped, its name is taken: use the `-livetest` suffix and a network alias if something needs to resolve it by name. `LOG_LEVEL=debug` matters here, since the engine's own view of the page is the evidence when a solve fails.
 
