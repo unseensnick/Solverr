@@ -6,7 +6,7 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ### Fixes
 
-- **On Chromium 156, which new images install, the Chrome engine no longer goes around a proxy that has a username and password.** The proxy could be skipped with the request still reporting success, or the request could hang well past `maxTimeout`. If the proxy cannot be set up, the launch now fails instead.
+- **The Chrome engine no longer goes around a proxy that has a username and password, which on the 1.9.1 image could expose your real IP address while the request reported success.** Requests could also hang well past `maxTimeout`. If the proxy cannot be set up, the launch now fails instead.
 
 ### Other
 
