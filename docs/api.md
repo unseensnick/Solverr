@@ -69,7 +69,7 @@ An example response, shortened:
   },
   "startTimestamp": 1594872947467,
   "endTimestamp": 1594872949617,
-  "version": "1.9.1"
+  "version": "1.9.2"
 }
 ```
 
