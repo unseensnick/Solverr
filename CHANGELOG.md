@@ -4,6 +4,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Other
+
+- Selenium, certifi, websockets and xvfbwrapper updated to the versions FlareSolverr uses.
+
 ## [1.9.1]
 
 ### Fixes
