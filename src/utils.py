@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.parse
 
 from selenium.webdriver.chrome.webdriver import WebDriver
@@ -22,6 +23,10 @@ CHROME_MAJOR_VERSION = None
 USER_AGENT = None
 XVFB_DISPLAY = None
 PATCHED_DRIVER_PATH = None
+
+# Ten seconds for the proxy extension's service worker to start after launch.
+_EXTENSION_POLL_SECONDS = 0.1
+_EXTENSION_LOAD_POLLS = 100
 
 
 def get_config_log_html() -> bool:
@@ -215,6 +220,13 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     proxy_extension_dir = None
     if proxy and all(key in proxy for key in ['url', 'username', 'password']):
         proxy_extension_dir = create_proxy_extension(proxy)
+        # The extension supplies the credentials; the switch is what keeps a
+        # request from going around the proxy. Without it a late or missing
+        # extension sent traffic direct and reported success, where this way it
+        # meets the proxy's 407. Host and port only: argv is readable.
+        parsed_proxy = urllib.parse.urlparse(proxy['url'])
+        options.add_argument('--proxy-server=%s://%s' % (
+            parsed_proxy.scheme, parsed_proxy.netloc.rsplit('@', 1)[-1]))
     elif proxy and 'url' in proxy:
         proxy_url = proxy['url']
         logging.debug("Using webdriver proxy: %s", redact.proxy_url(proxy_url))
@@ -223,9 +235,9 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # Everything from here on is inside the try because the extension directory
     # holds the proxy username and password in plaintext, and every step below
     # can raise: finding Chrome, reading its version and starting the display
-    # all failed with the credentials still on disk. Chrome has read the
-    # extension by the time the constructor returns, so the cleanup is safe as
-    # soon as the launch settles either way.
+    # all failed with the credentials still on disk. The cleanup waits for the
+    # extension's worker, not the constructor: Chromium 156 loads --load-extension
+    # after startup returns, so a directory deleted then is never read.
     try:
         if proxy_extension_dir is not None:
             disabled_features.append("DisableLoadExtensionCommandLineSwitch")
@@ -268,6 +280,9 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
             logging.error("Error starting Chrome: %s" % e)
             # No point in continuing if we cannot retrieve the driver
             raise e
+
+        if proxy_extension_dir is not None:
+            _await_proxy_extension(driver)
     finally:
         if proxy_extension_dir is not None:
             try:
@@ -290,6 +305,21 @@ def get_webdriver(proxy: dict = None) -> WebDriver:
     # driver = webdriver.Chrome(options=options)
 
     return driver
+
+
+def _await_proxy_extension(driver: WebDriver) -> None:
+    """Return once the proxy extension's service worker runs, else close the browser and raise.
+
+    Counted in polls so a patched sleep cannot turn the wait into a busy loop.
+    """
+    for _ in range(_EXTENSION_LOAD_POLLS):
+        targets = driver.execute_cdp_cmd("Target.getTargets", {})["targetInfos"]
+        if any(target["type"] == "service_worker" and target["url"].startswith("chrome-extension://")
+               for target in targets):
+            return
+        time.sleep(_EXTENSION_POLL_SECONDS)
+    driver.quit()
+    raise Exception("Chrome did not load the proxy extension, so the proxy cannot authenticate")
 
 
 def get_chrome_exe_path() -> str:

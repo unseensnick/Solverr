@@ -4,6 +4,10 @@ Solverr follows its own [Semantic Versioning](https://semver.org/), starting at 
 
 ## [Unreleased]
 
+### Fixes
+
+- **On Chromium 156, which new images install, the Chrome engine no longer goes around a proxy that has a username and password.** The proxy could be skipped with the request still reporting success, or the request could hang well past `maxTimeout`. If the proxy cannot be set up, the launch now fails instead.
+
 ### Other
 
 - Selenium, certifi, websockets and xvfbwrapper updated to the versions FlareSolverr uses.

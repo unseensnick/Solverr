@@ -135,6 +135,88 @@ def _launch_flags():
     return seen['args']
 
 
+class ExtensionLoadTest(unittest.TestCase):
+    """An authenticated proxy is in force before the browser is handed over.
+
+    Chromium 156 loads --load-extension after startup returns, so deleting the
+    directory then meant the extension never ran and, with nothing else naming
+    the proxy, every request went direct and reported success.
+    """
+
+    PROXY = {"url": "http://p:1", "username": "u", "password": "secret"}
+    WORKER = {"type": "service_worker", "url": "chrome-extension://abc/background.js"}
+
+    def launch(self, driver, proxy=None):
+        with patch.object(utils, 'get_chrome_exe_path', return_value="/bin/chromium"), \
+                patch.object(utils, 'get_chrome_major_version', return_value="151"), \
+                patch.object(utils, 'start_xvfb_display'), \
+                patch.object(utils, 'PATCHED_DRIVER_PATH', "/bin/chromedriver"), \
+                patch.object(utils.time, 'sleep', lambda _seconds: None), \
+                patch.object(geo, 'browser_language', return_value="en-US"), \
+                patch.object(geo, 'browser_timezone', return_value="UTC"), \
+                patch('undetected_chromedriver.Chrome', side_effect=driver):
+            return utils.get_webdriver(proxy or self.PROXY)
+
+    def test_the_directory_survives_until_the_worker_is_running(self):
+        driver = _TargetsDriver([[], [], [self.WORKER]])
+        self.launch(lambda options=None, **kwargs: driver.opened(options))
+        self.assertEqual(driver.directory_present, [True, True, True])
+
+    def test_the_directory_is_gone_once_the_launch_returns(self):
+        driver = _TargetsDriver([[self.WORKER]])
+        self.launch(lambda options=None, **kwargs: driver.opened(options))
+        self.assertFalse(os.path.exists(driver.directory))
+
+    def test_a_worker_that_never_starts_fails_the_launch(self):
+        driver = _TargetsDriver([[]])
+        with self.assertRaisesRegex(Exception, "proxy extension"):
+            self.launch(lambda options=None, **kwargs: driver.opened(options))
+
+    def test_a_worker_that_never_starts_closes_the_browser(self):
+        driver = _TargetsDriver([[]])
+        try:
+            self.launch(lambda options=None, **kwargs: driver.opened(options))
+        except Exception:
+            pass
+        self.assertTrue(driver.quit_called)
+
+    def test_the_proxy_is_named_on_the_command_line_too(self):
+        # So a late or missing extension fails on the proxy's 407 instead of
+        # sending the request around it.
+        driver = _TargetsDriver([[self.WORKER]])
+        self.launch(lambda options=None, **kwargs: driver.opened(options))
+        self.assertIn('--proxy-server=http://p:1', driver.arguments)
+
+    def test_credentials_in_the_url_stay_off_the_command_line(self):
+        driver = _TargetsDriver([[self.WORKER]])
+        proxy = {"url": "http://a:b@p:1", "username": "u", "password": "secret"}
+        self.launch(lambda options=None, **kwargs: driver.opened(options), proxy)
+        self.assertIn('--proxy-server=http://p:1', driver.arguments)
+
+
+class _TargetsDriver(_FakeDriver):
+    """Answers Target.getTargets from a script, repeating the last answer."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.directory_present = []
+        self.quit_called = False
+
+    def opened(self, options):
+        self.arguments = list(options.arguments)
+        loaded = next(a for a in self.arguments if a.startswith('--load-extension='))
+        self.directory = loaded.split('=', 1)[1]
+        return self
+
+    def execute_cdp_cmd(self, _command, _params):
+        self.directory_present.append(os.path.exists(self.directory))
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        return {"targetInfos": answer}
+
+    def quit(self):
+        self.quit_called = True
+
+
 class ExtensionScriptEscapingTest(unittest.TestCase):
     """Proxy fields from a /v1 request reach background.js as literals, never as code.
 
