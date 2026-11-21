@@ -47,7 +47,7 @@ jobs:
           fi
 
       - name: Install parse-changelog
-        uses: taiki-e/install-action@82853118809adb42e887a62bfb2e5c838fc3683c # parse-changelog
+        uses: taiki-e/install-action@c08313ddd183b87241ae0994b03170a89942c516 # parse-changelog
 
       - name: Prepare release body
         env:
